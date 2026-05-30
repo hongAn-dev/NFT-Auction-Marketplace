@@ -1,0 +1,286 @@
+basePath: /
+host: localhost:8080
+info:
+  contact:
+    email: support@swagger.io
+    name: API Support
+    url: http://www.swagger.io/support
+  description: High-performance distributed backend service for real-time NFT auctions.
+  license:
+    name: Apache 2.0
+    url: http://www.apache.org/licenses/LICENSE-2.0.html
+  termsOfService: http://swagger.io/terms/
+  title: CURATORIAL NFT Bidding & Auction API
+  version: "1.0"
+paths:
+  /api/v1/nfts:
+    get:
+      consumes:
+      - application/json
+      description: Lấy toàn bộ danh sách các tác phẩm NFT đang có trong PostgreSQL
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Lấy toàn bộ danh sách NFT
+      tags:
+      - NFTs
+    post:
+      consumes:
+      - application/json
+      description: Tạo mới NFT và lưu vào PostgreSQL
+      parameters:
+      - description: NFT Create Payload
+        in: body
+        name: input
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Tạo mới một tác phẩm NFT
+      tags:
+      - NFTs
+  /api/v1/nfts/{id}:
+    delete:
+      consumes:
+      - application/json
+      description: Xóa NFT khỏi PostgreSQL, đồng thời xóa cache Redis và Metadata
+        trong MongoDB
+      parameters:
+      - description: NFT ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Xóa NFT khỏi hệ thống
+      tags:
+      - NFTs
+    get:
+      consumes:
+      - application/json
+      description: Lấy chi tiết NFT theo ID, tự động gộp dữ liệu từ Postgres (SQL)
+        và MongoDB (NoSQL Metadata)
+      parameters:
+      - description: NFT ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Lấy thông tin chi tiết NFT
+      tags:
+      - NFTs
+    put:
+      consumes:
+      - application/json
+      description: Cập nhật thông tin tiêu đề, mô tả, ảnh hoặc trạng thái của NFT
+        theo ID
+      parameters:
+      - description: NFT ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: NFT Update Payload
+        in: body
+        name: input
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties: true
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Cập nhật thông tin NFT
+      tags:
+      - NFTs
+  /api/v1/nfts/{id}/metadata:
+    post:
+      consumes:
+      - application/json
+      description: Lưu các thuộc tính phi cấu trúc (generative traits, IPFS hash,
+        độ hiếm) vào MongoDB kết nối với NFT Postgres
+      parameters:
+      - description: NFT ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Metadata Payload
+        in: body
+        name: input
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties: true
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Thêm hoặc cập nhật Metadata động (MongoDB)
+      tags:
+      - NFTs
+  /api/v1/s3/presign:
+    get:
+      consumes:
+      - application/json
+      description: Sinh ra một Presigned Upload URL trực tiếp lên Cloudflare R2 hoặc
+        S3 local fallback mock
+      parameters:
+      - description: Filename
+        in: query
+        name: file
+        required: true
+        type: string
+      - description: Mime Type
+        in: query
+        name: type
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Tạo Presigned URL để upload ảnh
+      tags:
+      - Storage
+  /api/v1/s3/upload:
+    put:
+      consumes:
+      - application/octet-stream
+      description: Tiếp nhận luồng nhị phân (Binary) upload từ PUT request và lưu
+        cục bộ vào ./uploads
+      parameters:
+      - description: Filename
+        in: query
+        name: file
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Upload ảnh nhị phân trực tiếp (Mock S3 local)
+      tags:
+      - Storage
+swagger: "2.0"

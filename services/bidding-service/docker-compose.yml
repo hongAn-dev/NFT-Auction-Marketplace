@@ -1,0 +1,200 @@
+version: '3.8'
+
+services:
+  # ── CƠ SỞ DỮ LIỆU POSTGRESQL ─────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: nft_postgres_db
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: nft_user
+      POSTGRES_PASSWORD: secret_password
+      POSTGRES_DB: nft_auction
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nft_user -d nft_auction"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ── CƠ SỞ DỮ LIỆU IN-MEMORY REDIS ────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: nft_redis_cache
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ── CƠ SỞ DỮ LIỆU PHI QUAN HỆ MONGODB ─────────────────────────
+  mongodb:
+    image: mongo:6.0
+    container_name: nft_mongo_db
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ── MESSAGE BROKER RABBITMQ (MANAGEMENT) ──────────────────────
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: nft_rabbitmq_broker
+    restart: unless-stopped
+    ports:
+      - "5672:5672"    # AMQP protocol port
+      - "15672:15672"  # Management Web UI Dashboard
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD-SHELL", "rabbitmq-diagnostics -q ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── DỊCH VỤ GO BACKEND (BIDDING SERVICE) ──────────────────────
+  bidding-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: nft_bidding_service
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+      - "50051:50051"
+    environment:
+      APP_ENV: development
+      APP_PORT: 8080
+      GRPC_PORT: 50051
+      # Cấu hình Postgres
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: nft_user
+      DB_PASSWORD: secret_password
+      DB_NAME: nft_auction
+      # Cấu hình Redis
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      # Cấu hình MongoDB
+      MONGO_URI: mongodb://mongodb:27017
+      MONGO_DB: nft_metadata
+      # Cấu hình RabbitMQ
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      # Cấu hình Cloudflare R2
+      R2_ACCOUNT_ID: "${R2_ACCOUNT_ID}"
+      R2_ACCESS_KEY_ID: "${R2_ACCESS_KEY_ID}"
+      R2_SECRET_ACCESS_KEY: "${R2_SECRET_ACCESS_KEY}"
+      R2_BUCKET_NAME: "${R2_BUCKET_NAME}"
+      R2_PUBLIC_URL: "${R2_PUBLIC_URL}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  # ── DỊCH VỤ GO ASYNC WORKERS (WORKER SERVICE) ──────────────────
+  worker-service:
+    build:
+      context: ../worker-service
+      dockerfile: Dockerfile
+    container_name: nft_worker_service
+    restart: unless-stopped
+    environment:
+      # Cấu hình Postgres để Royalty Worker ghi DB
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: nft_user
+      DB_PASSWORD: secret_password
+      DB_NAME: nft_auction
+      # Cấu hình RabbitMQ để lắng nghe sự kiện
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  # ── DỊCH VỤ NESTJS BFF / API GATEWAY (REST + WEBSOCKET) ───────
+  api-gateway:
+    build:
+      context: ../api-gateway
+      dockerfile: Dockerfile
+    container_name: nft_api_gateway
+    restart: unless-stopped
+    ports:
+      - "4000:4000"
+    environment:
+      PORT: 4000
+      BIDDING_SERVICE_URL: bidding-service:50051
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    depends_on:
+      bidding-service:
+        condition: service_started
+      redis:
+        condition: service_healthy
+
+  # ── DỊCH VỤ NEXT.JS FRONTEND (WEB) ───────────────────────────
+  web-frontend:
+    build:
+      context: ../web
+      dockerfile: Dockerfile
+    container_name: nft_web_frontend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+    depends_on:
+      - api-gateway
+      - bidding-service
+
+  # ── TRÌNH QUẢN TRỊ CSDL TRỰC QUAN (ADMINER WEB GUI) ───────────
+  adminer:
+    image: adminer:latest
+    container_name: nft_db_adminer
+    restart: unless-stopped
+    ports:
+      - "8081:8080"
+    depends_on:
+      - postgres
+
+  # ── TRÌNH QUẢN TRỊ MONGODB TRỰC QUAN (MONGO EXPRESS WEB GUI) ──
+  mongo-express:
+    image: mongo-express:latest
+    container_name: nft_mongo_express
+    restart: unless-stopped
+    ports:
+      - "8082:8081"
+    environment:
+      ME_CONFIG_MONGODB_SERVER: mongodb
+      ME_CONFIG_MONGODB_PORT: 27017
+      ME_CONFIG_BASICAUTH_USERNAME: ""
+      ME_CONFIG_BASICAUTH_PASSWORD: ""
+    depends_on:
+      - mongodb
+
+volumes:
+  postgres_data:
+    driver: local
+  mongo_data:
+    driver: local
+  rabbitmq_data:
+    driver: local
