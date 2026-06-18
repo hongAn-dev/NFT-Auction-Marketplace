@@ -354,3 +354,94 @@ a {
   font-size: 0.8rem;
   text-transform: uppercase;
 }
+
+/* Toast System - Institutional Curatorial Aesthetics */
+.toast-container {
+  position: fixed;
+  bottom: 2rem;
+  right: 2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  z-index: 9999;
+  max-width: 400px;
+  width: calc(100vw - 4rem);
+}
+
+.toast {
+  background-color: var(--container-bg);
+  border: 1px solid var(--border-color);
+  padding: 1rem 1.5rem;
+  border-radius: 0px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  animation: toast-slide-up 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  position: relative;
+}
+
+.toast-content {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  font-size: 0.85rem;
+  font-weight: 700;
+  font-family: var(--font-headline);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.toast-close {
+  background: transparent;
+  border: none;
+  font-family: var(--font-body);
+  font-weight: 700;
+  cursor: pointer;
+  padding: 0.2rem;
+  font-size: 0.8rem;
+  line-height: 1;
+}
+
+.toast-close:hover {
+  color: var(--accent-color);
+}
+
+/* Toast Variants */
+.toast-success {
+  border-left: 4px solid #00FF00;
+  background-color: #FFFFFF;
+  color: var(--text-color);
+}
+
+.toast-error {
+  border-left: 4px solid var(--accent-color);
+  background-color: #FFF5F5;
+  color: var(--text-color);
+}
+
+.toast-info {
+  border-left: 4px solid var(--border-color);
+  background-color: var(--bg-color);
+  color: var(--text-color);
+}
+
+@keyframes toast-slide-up {
+  from {
+    transform: translateY(20px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes toast-fade-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}

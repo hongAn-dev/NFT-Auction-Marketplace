@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ClientsModule, Transport } from '@nestjs/microservices';
 import { join } from 'path';
 import { BiddingController } from './controllers/bidding.controller';
+import { AuthController } from './controllers/auth.controller';
 import { BiddingGateway } from './gateways/bidding.gateway';
 
 @Module({
@@ -21,7 +22,7 @@ import { BiddingGateway } from './gateways/bidding.gateway';
       },
     ]),
   ],
-  controllers: [BiddingController],
+  controllers: [BiddingController, AuthController],
   providers: [BiddingGateway],
 })
 export class AppModule {}

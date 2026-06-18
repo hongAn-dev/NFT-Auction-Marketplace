@@ -62,7 +62,7 @@ func InitDB() (*gorm.DB, error) {
 	// GORM sẽ quét qua struct domain.NFT và tự động tạo bảng "nfts" với đầy đủ các cột tương ứng.
 	// Bạn không cần viết bất kỳ lệnh CREATE TABLE nào bằng SQL thô!
 	fmt.Println("🔧 Đang đồng bộ hóa cấu trúc bảng (AutoMigrate)...")
-	err = db.AutoMigrate(&domain.NFT{})
+	err = db.AutoMigrate(&domain.NFT{}, &domain.OutboxEvent{}, &domain.SagaLog{})
 	if err != nil {
 		return nil, fmt.Errorf("lỗi trong quá trình AutoMigrate: %w", err)
 	}

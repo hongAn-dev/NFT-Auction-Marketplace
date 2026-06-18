@@ -2,10 +2,12 @@ import { useState } from 'react';
 import Head from 'next/head';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
-import { ArrowLeft, Upload, CheckCircle2, AlertCircle, HelpCircle, HardDrive, Server } from 'lucide-react';
+import { ArrowLeft, Upload, HelpCircle, HardDrive, Server } from 'lucide-react';
+import { useToast } from '../context/ToastContext';
 
 export default function CreateNFT() {
   const router = useRouter();
+  const { showToast } = useToast();
   
   // Basic Info
   const [title, setTitle] = useState('');
@@ -26,7 +28,6 @@ export default function CreateNFT() {
   // Status State
   const [loading, setLoading] = useState(false);
   const [uploadStatus, setUploadStatus] = useState<string>('');
-  const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
@@ -39,12 +40,12 @@ export default function CreateNFT() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedFile) {
-      setMessage({ type: 'error', text: 'Please upload a digital asset file (JPEG/PNG) for this exhibition.' });
+      showToast('Please upload a digital asset file (JPEG/PNG) for this exhibition.', 'error');
       return;
     }
 
     setLoading(true);
-    setMessage(null);
+    showToast('Negotiating presigned storage handshake...', 'info');
     setUploadStatus('1/3: Negotiating presigned storage handshake...');
 
     try {
@@ -66,6 +67,7 @@ export default function CreateNFT() {
       if (presignData && presignData.success) {
         // ONLINE MODE (R2 / Mock S3)
         imageUrl = presignData.public_url;
+        showToast(`Streaming direct to R2/S3 (${presignData.storage_type})...`, 'info');
         setUploadStatus(`2/3: Streaming binary stream direct to R2/S3 (${presignData.storage_type})...`);
 
         // PUT request nhị phân trực tiếp lên Cloudflare R2 hoặc Mock S3 cục bộ
@@ -83,11 +85,13 @@ export default function CreateNFT() {
       } else {
         // OFFLINE MODE / MOCK SANDBOX FALLBACK
         imageUrl = previewUrl; // Use local blob url for demonstration
+        showToast('Simulating offline asset secure storage...', 'info');
         setUploadStatus('2/3: Simulating offline asset secure storage...');
         await new Promise((resolve) => setTimeout(resolve, 1500));
       }
 
       // ── BƯỚC 2: TẠO NFT TRONG POSTGRESQL ──────────────────────────────
+      showToast('Committing metadata schema to SQL + NoSQL databases...', 'info');
       setUploadStatus('3/3: Committing metadata schema to SQL + NoSQL databases...');
       
       const nftPayload = {
@@ -140,10 +144,7 @@ export default function CreateNFT() {
         }
       }
 
-      setMessage({
-        type: 'success',
-        text: `Success! Lot #${nftId.toUpperCase()} created successfully on ${presignData ? presignData.storage_type.toUpperCase() : 'OFFLINE SANDBOX'}.`
-      });
+      showToast(`Success! Lot #${nftId.toUpperCase()} created successfully!`, 'success');
 
       // Redirect back home after 3s
       setTimeout(() => {
@@ -151,7 +152,7 @@ export default function CreateNFT() {
       }, 3000);
 
     } catch (err: any) {
-      setMessage({ type: 'error', text: err.message || 'Workflow broke during digital artwork creation pipeline.' });
+      showToast(err.message || 'Workflow broke during digital artwork creation pipeline.', 'error');
     } finally {
       setLoading(false);
       setUploadStatus('');
@@ -176,21 +177,6 @@ export default function CreateNFT() {
           Submit high-resolution digital masterworks to the curated gallery. Integrated with Cloudflare R2 object storage.
         </p>
       </div>
-
-      {message && (
-        <div className="border-box" style={{
-          borderColor: message.type === 'success' ? '#00FF00' : 'var(--accent-color)',
-          background: message.type === 'success' ? '#F5FFF5' : '#FFF5F5',
-          marginBottom: '2rem',
-          padding: '1rem 1.5rem',
-          display: 'flex',
-          gap: '1rem',
-          alignItems: 'center'
-        }}>
-          {message.type === 'success' ? <CheckCircle2 color="green" /> : <AlertCircle className="text-accent" />}
-          <span style={{ fontSize: '0.9rem', fontWeight: 600 }}>{message.text}</span>
-        </div>
-      )}
 
       <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
         

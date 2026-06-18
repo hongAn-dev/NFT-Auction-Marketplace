@@ -44,3 +44,7 @@ Thumbs.db
 *.out
 services/bidding-service/uploads/
 **/uploads/
+
+# Go compiled binaries (without extension)
+services/bidding-service/server
+services/worker-service/worker

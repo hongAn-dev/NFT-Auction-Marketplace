@@ -3,7 +3,9 @@ import { GetServerSideProps } from 'next';
 import Head from 'next/head';
 import Link from 'next/link';
 import { io, Socket } from 'socket.io-client';
-import { ArrowLeft, Clock, Shield, Award, Database, FileText, CheckCircle2, AlertCircle } from 'lucide-react';
+import { ArrowLeft, Clock, Shield, Award, Database, FileText, Lock } from 'lucide-react';
+import { getUserProfile, getAccessToken, UserProfile } from '../../utils/auth';
+import { useToast } from '../../context/ToastContext';
 
 interface NFT {
   id: string;
@@ -39,14 +41,94 @@ interface DetailProps {
 }
 
 export default function NFTDetail({ nft, metadata, initialHighestBid, error }: DetailProps) {
+  const { showToast } = useToast();
   const [highestBid, setHighestBid] = useState<HighestBid | null>(initialHighestBid);
   const [bids, setBids] = useState<HighestBid[]>([]);
   const [bidAmount, setBidAmount] = useState<string>('');
-  const [userId, setUserId] = useState<string>('collector-' + Math.floor(Math.random() * 1000));
   const [loading, setLoading] = useState<boolean>(false);
-  const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [timeLeft, setTimeLeft] = useState<string>('');
+  const [user, setUser] = useState<UserProfile | null>(null);
+  const [isClient, setIsClient] = useState(false);
+  const [balance, setBalance] = useState<number | null>(null);
+  const [ethBalance, setEthBalance] = useState<string | null>(null);
   const socketRef = useRef<Socket | null>(null);
+
+  const formatVND = (amountInUSD: number) => {
+    return `${(amountInUSD * 25000).toLocaleString('vi-VN')} VND`;
+  };
+
+  const formatETH = (amountInUSD: number) => {
+    return `${(amountInUSD / 3000).toFixed(4)} ETH`;
+  };
+
+  const formatCurrency = (amountInUSD: number) => {
+    return `${formatVND(amountInUSD)} (~${formatETH(amountInUSD)})`;
+  };
+
+  const handleBidAmountChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value;
+    if (user && !user.email.endsWith('@web3.auth')) {
+      const clean = value.replace(/\D/g, '');
+      if (clean === '') {
+        setBidAmount('');
+      } else {
+        const num = parseInt(clean, 10);
+        setBidAmount(num.toLocaleString('vi-VN'));
+      }
+    } else {
+      const clean = value.replace(/[^0-9.]/g, '');
+      const parts = clean.split('.');
+      if (parts.length > 2) return;
+      setBidAmount(clean);
+    }
+  };
+
+  useEffect(() => {
+    setIsClient(true);
+    const profile = getUserProfile();
+    setUser(profile);
+
+    if (profile) {
+      const email = profile.email || '';
+      const isWeb3 = email.endsWith('@web3.auth');
+      if (isWeb3) {
+        const address = email.split('@')[0];
+        if (address.startsWith('0x') && typeof window !== 'undefined' && (window as any).ethereum) {
+          const fetchEthBalance = async () => {
+            try {
+              const hexBalance = await (window as any).ethereum.request({
+                method: 'eth_getBalance',
+                params: [address, 'latest'],
+              });
+              const wei = BigInt(hexBalance);
+              const eth = (Number(wei) / 1e18).toFixed(4);
+              setEthBalance(eth);
+            } catch (err) {
+              console.error('Failed to fetch Web3 balance:', err);
+            }
+          };
+          fetchEthBalance();
+        }
+      } else {
+        const fetchWeb2Balance = async () => {
+          const token = getAccessToken();
+          if (!token) return;
+          try {
+            const res = await fetch('http://localhost:4000/api/auth/payment/balance', {
+              headers: { Authorization: `Bearer ${token}` }
+            });
+            const data = await res.json();
+            if (res.ok && data.success) {
+              setBalance(data.data.balance);
+            }
+          } catch (err) {
+            console.error('Failed to fetch Web2 balance:', err);
+          }
+        };
+        fetchWeb2Balance();
+      }
+    }
+  }, []);
 
   // Countdown timer simulation
   useEffect(() => {
@@ -97,12 +179,11 @@ export default function NFTDetail({ nft, metadata, initialHighestBid, error }: D
         setHighestBid(data);
         setBids((prev) => [data, ...prev].slice(0, 10)); // Keep last 10 bids
         
-        // Brief flash sound or notification
-        setMessage({
-          type: 'success',
-          text: `New bid placed: ${data.amount.toLocaleString('en-US', { style: 'currency', currency: 'USD' })} by ${data.userId}!`
-        });
-        setTimeout(() => setMessage(null), 5000);
+        // Show live notification toast
+        showToast(
+          `New live bid placed: ${user && user.email.endsWith('@web3.auth') ? formatETH(data.amount) : formatVND(data.amount)} by collector ${data.userId.substring(0, 8)}...`,
+          'info'
+        );
       }
     });
 
@@ -120,31 +201,75 @@ export default function NFTDetail({ nft, metadata, initialHighestBid, error }: D
 
   const handlePlaceBid = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!bidAmount || isNaN(parseFloat(bidAmount))) {
-      setMessage({ type: 'error', text: 'Please enter a valid numeric bidding amount.' });
+    const isWeb3 = user && user.email.endsWith('@web3.auth');
+    const rawAmount = isWeb3 
+      ? bidAmount.replace(/,/g, '') 
+      : bidAmount.replace(/\./g, '').replace(/,/g, '');
+
+    if (!rawAmount || isNaN(parseFloat(rawAmount))) {
+      showToast('Please enter a valid numeric bidding amount.', 'error');
       return;
     }
 
     const currentLimit = highestBid ? highestBid.amount : nft.start_price;
-    if (parseFloat(bidAmount) <= currentLimit) {
-      setMessage({
-        type: 'error',
-        text: `Your bid must be strictly greater than current value of $${currentLimit.toLocaleString()}`
-      });
+    const inputVal = parseFloat(rawAmount);
+    
+    // Convert client-entered bid value to USD base currency
+    let bidValInUSD = 0;
+    if (isWeb3) {
+      bidValInUSD = inputVal * 3000;
+    } else {
+      bidValInUSD = inputVal / 25000;
+    }
+
+    if (bidValInUSD <= currentLimit) {
+      showToast(
+        `Your bid must be strictly greater than current value of ${user && user.email.endsWith('@web3.auth') ? formatETH(currentLimit) : formatVND(currentLimit)}`,
+        'error'
+      );
       return;
     }
 
+    // Client-side balance check
+    if (user) {
+      if (isWeb3) {
+        if (ethBalance === null) {
+          showToast('Still fetching your ETH wallet balance, please try again.', 'error');
+          return;
+        }
+        if (parseFloat(ethBalance) < inputVal) {
+          showToast(`Insufficient ETH balance. Connected wallet has ${ethBalance} ETH.`, 'error');
+          return;
+        }
+      } else {
+        if (balance === null) {
+          showToast('Still fetching your account balance, please try again.', 'error');
+          return;
+        }
+        if (balance < inputVal) {
+          showToast(`Insufficient balance. Your current balance is ${balance.toLocaleString('vi-VN')} VND.`, 'error');
+          return;
+        }
+      }
+    }
+
     setLoading(true);
-    setMessage(null);
 
     try {
+      const token = getAccessToken();
+      if (!token) {
+        throw new Error('Authentication is required to place a bid. Please log in.');
+      }
+
       const res = await fetch('http://localhost:4000/api/v1/bids', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
         body: JSON.stringify({
           nftId: nft.id,
-          userId: userId,
-          amount: parseFloat(bidAmount)
+          amount: bidValInUSD
         })
       });
 
@@ -153,10 +278,32 @@ export default function NFTDetail({ nft, metadata, initialHighestBid, error }: D
         throw new Error(data.error?.message || 'Bidding request rejected by system validation.');
       }
 
-      setMessage({ type: 'success', text: 'Your bid has been processed and broadcasted successfully!' });
+      showToast('Your bid has been processed and broadcasted successfully!', 'success');
       setBidAmount('');
+      // Update local balance state immediately
+      if (user) {
+        if (isWeb3) {
+          const email = user.email || '';
+          const address = email.split('@')[0];
+          if (address.startsWith('0x') && typeof window !== 'undefined' && (window as any).ethereum) {
+            try {
+              const hexBalance = await (window as any).ethereum.request({
+                method: 'eth_getBalance',
+                params: [address, 'latest'],
+              });
+              const wei = BigInt(hexBalance);
+              const eth = (Number(wei) / 1e18).toFixed(4);
+              setEthBalance(eth);
+            } catch (err) {
+              console.error('Failed to update ETH balance:', err);
+            }
+          }
+        } else {
+          setBalance((prev) => (prev !== null ? prev - inputVal : null));
+        }
+      }
     } catch (err: any) {
-      setMessage({ type: 'error', text: err.message || 'System failed to register bid. Ensure all docker containers are active.' });
+      showToast(err.message || 'System failed to register bid. Ensure all docker containers are active.', 'error');
     } finally {
       setLoading(false);
     }
@@ -175,28 +322,6 @@ export default function NFTDetail({ nft, metadata, initialHighestBid, error }: D
           <ArrowLeft size={16} /> BACK TO EXHIBITION
         </Link>
       </div>
-
-      {error && (
-        <div className="border-box" style={{ borderColor: 'var(--accent-color)', background: '#FFF5F5', display: 'flex', gap: '1rem', alignItems: 'center', marginBottom: '2rem' }}>
-          <AlertCircle className="text-accent" />
-          <span style={{ fontSize: '0.85rem' }}>{error}. Utilizing local mock sandbox for full interactivity offline.</span>
-        </div>
-      )}
-
-      {message && (
-        <div className="border-box" style={{
-          borderColor: message.type === 'success' ? '#00FF00' : 'var(--accent-color)',
-          background: message.type === 'success' ? '#F5FFF5' : '#FFF5F5',
-          marginBottom: '2rem',
-          padding: '1rem 1.5rem',
-          display: 'flex',
-          gap: '1rem',
-          alignItems: 'center'
-        }}>
-          {message.type === 'success' ? <CheckCircle2 color="green" /> : <AlertCircle className="text-accent" />}
-          <span style={{ fontSize: '0.9rem', fontWeight: 600 }}>{message.text}</span>
-        </div>
-      )}
 
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.2fr) minmax(0, 1fr)', gap: '4rem', alignItems: 'start' }}>
         {/* Left Column: Media Gallery */}
@@ -283,9 +408,25 @@ export default function NFTDetail({ nft, metadata, initialHighestBid, error }: D
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <div>
                 <span style={{ fontSize: '0.75rem', textTransform: 'uppercase', color: '#666', fontWeight: 700, letterSpacing: '0.05em' }}>Value Valuation</span>
-                <h2 style={{ fontSize: '2rem', color: 'var(--accent-color)', fontWeight: 800, marginTop: '0.2rem' }}>
-                  {currentPrice.toLocaleString('en-US', { style: 'currency', currency: 'USD' })}
-                </h2>
+                {user && user.email.endsWith('@web3.auth') ? (
+                  <div>
+                    <h2 style={{ fontSize: '2.5rem', color: 'var(--accent-color)', fontWeight: 800, marginTop: '0.2rem', lineHeight: '1.2' }}>
+                      {formatETH(currentPrice)}
+                    </h2>
+                    <div style={{ fontSize: '0.95rem', color: '#666', fontWeight: 700, marginTop: '0.25rem' }}>
+                      ≈ {formatVND(currentPrice)}
+                    </div>
+                  </div>
+                ) : (
+                  <div>
+                    <h2 style={{ fontSize: '2.5rem', color: 'var(--accent-color)', fontWeight: 800, marginTop: '0.2rem', lineHeight: '1.2' }}>
+                      {formatVND(currentPrice)}
+                    </h2>
+                    <div style={{ fontSize: '0.95rem', color: '#666', fontWeight: 700, marginTop: '0.25rem' }}>
+                      ≈ {formatETH(currentPrice)}
+                    </div>
+                  </div>
+                )}
               </div>
               <div style={{ textAlign: 'right' }}>
                 <span style={{ fontSize: '0.75rem', textTransform: 'uppercase', color: '#666', fontWeight: 700, letterSpacing: '0.05em', display: 'flex', alignItems: 'center', gap: '0.3rem', justifyContent: 'flex-end' }}>
@@ -297,39 +438,70 @@ export default function NFTDetail({ nft, metadata, initialHighestBid, error }: D
               </div>
             </div>
 
-            <form onSubmit={handlePlaceBid} style={{ borderTop: '1px solid #EAE8E0', paddingTop: '1.5rem' }}>
-              <div className="form-group" style={{ marginBottom: '1rem' }}>
-                <label className="form-label" htmlFor="user-id">COLLECTOR SIGNATURE</label>
-                <input
-                  id="user-id"
-                  type="text"
-                  className="form-input"
-                  value={userId}
-                  onChange={(e) => setUserId(e.target.value)}
-                  placeholder="Enter your user ID"
-                  required
-                />
+            {!isClient ? (
+              <div style={{ textAlign: 'center', padding: '1rem', color: '#666' }}>Loading curatorial bidding modules...</div>
+            ) : !user ? (
+              <div style={{ borderTop: '1px solid #EAE8E0', paddingTop: '1.5rem', textAlign: 'center', display: 'flex', flexDirection: 'column', gap: '1rem', alignItems: 'center' }}>
+                <Lock size={32} className="text-accent" />
+                <div style={{ fontWeight: 800, fontSize: '0.9rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                  Collector Authentication Required
+                </div>
+                <p style={{ fontSize: '0.8rem', color: '#666', lineHeight: 1.4 }}>
+                  You must sign in with your collector signature to place a binding bid offer.
+                </p>
+                <Link href="/auth" className="btn btn-accent" style={{ width: '100%', padding: '0.8rem' }}>
+                  LOG IN / REGISTER
+                </Link>
               </div>
+            ) : (
+              <form onSubmit={handlePlaceBid} style={{ borderTop: '1px solid #EAE8E0', paddingTop: '1.5rem' }}>
+                <div className="form-group" style={{ marginBottom: '1rem' }}>
+                  <label className="form-label">COLLECTOR IDENTITY</label>
+                  <input
+                    type="text"
+                    className="form-input"
+                    value={`${user.email} (${user.role.toUpperCase()})`}
+                    disabled
+                    style={{ background: '#FAF9F6', color: '#666', cursor: 'not-allowed' }}
+                  />
+                </div>
 
-              <div className="form-group" style={{ marginBottom: '1.5rem' }}>
-                <label className="form-label" htmlFor="bid-amount">BID OFFER ($ USD)</label>
-                <input
-                  id="bid-amount"
-                  type="number"
-                  step="0.01"
-                  className="form-input"
-                  style={{ fontSize: '1.5rem', fontWeight: 700, padding: '0.6rem 1rem' }}
-                  value={bidAmount}
-                  onChange={(e) => setBidAmount(e.target.value)}
-                  placeholder={(currentPrice + 50).toFixed(2)}
-                  required
-                />
-              </div>
+                <div className="form-group" style={{ marginBottom: '1.5rem' }}>
+                  <label className="form-label" htmlFor="bid-amount">
+                    BID OFFER ({user.email.endsWith('@web3.auth') ? 'ETH' : 'VND'})
+                  </label>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                    <input
+                      id="bid-amount"
+                      type="text"
+                      className="form-input"
+                      style={{ fontSize: '1.5rem', fontWeight: 700, padding: '0.6rem 1rem' }}
+                      value={bidAmount}
+                      onChange={handleBidAmountChange}
+                      placeholder={
+                        user.email.endsWith('@web3.auth')
+                          ? (currentPrice / 3000 + 0.01).toFixed(4)
+                          : (currentPrice * 25000 + 10000).toLocaleString('vi-VN')
+                      }
+                      required
+                    />
+                    {user.email.endsWith('@web3.auth') ? (
+                      <span style={{ fontSize: '0.75rem', color: '#666' }}>
+                        Your Wallet Balance: <strong>{ethBalance !== null ? `${ethBalance} ETH` : 'Loading...'}</strong>
+                      </span>
+                    ) : (
+                      <span style={{ fontSize: '0.75rem', color: '#666' }}>
+                        Your Account Balance: <strong>{balance !== null ? `${balance.toLocaleString('vi-VN')} VND` : 'Loading...'}</strong>
+                      </span>
+                    )}
+                  </div>
+                </div>
 
-              <button type="submit" disabled={loading} className="btn btn-accent" style={{ width: '100%', fontSize: '1rem', padding: '1rem' }}>
-                {loading ? 'TRANSMITTING BID OFFER...' : 'SUBMIT AUTHORIZED BID'}
-              </button>
-            </form>
+                <button type="submit" disabled={loading} className="btn btn-accent" style={{ width: '100%', fontSize: '1rem', padding: '1rem' }}>
+                  {loading ? 'TRANSMITTING BID OFFER...' : 'SUBMIT AUTHORIZED BID'}
+                </button>
+              </form>
+            )}
 
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: '#FAF9F6', padding: '0.8rem 1rem', fontSize: '0.75rem', color: '#666' }}>
               <Shield size={16} className="text-accent" />
@@ -357,8 +529,13 @@ export default function NFTDetail({ nft, metadata, initialHighestBid, error }: D
                         <div style={{ fontSize: '0.65rem', color: '#999' }}>{new Date(b.createdAt).toLocaleTimeString()}</div>
                       </div>
                     </div>
-                    <div style={{ fontWeight: 800, fontSize: '1rem', color: 'var(--accent-color)' }}>
-                      {b.amount.toLocaleString('en-US', { style: 'currency', currency: 'USD' })}
+                    <div style={{ textAlign: 'right' }}>
+                      <div style={{ fontWeight: 800, fontSize: '1.1rem', color: 'var(--accent-color)' }}>
+                        {user && user.email.endsWith('@web3.auth') ? formatETH(b.amount) : formatVND(b.amount)}
+                      </div>
+                      <div style={{ fontSize: '0.75rem', color: '#666', fontWeight: 600, marginTop: '0.1rem' }}>
+                        ≈ {user && user.email.endsWith('@web3.auth') ? formatVND(b.amount) : formatETH(b.amount)}
+                      </div>
                     </div>
                   </div>
                 ))

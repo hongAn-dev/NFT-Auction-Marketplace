@@ -14,7 +14,9 @@ import (
 	_ "bidding-service/docs"
 	"bidding-service/internal/handler"
 	"bidding-service/internal/logger"
+	"bidding-service/internal/outbox"
 	"bidding-service/internal/repository"
+	"bidding-service/internal/saga"
 	"bidding-service/internal/usecase"
 	pb "bidding-service/proto"
 
@@ -173,8 +175,38 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Khởi tạo gRPC Handler nhận Postgres, Redis và RabbitMQ để chạy Distributed Lock và Publish Event
-	nftGRPCHandler := handler.NewBiddingGRPCHandler(nftUsecase, redisRepo, rabbitRepo)
+	outboxRepo := repository.NewPostgresOutboxRepository(db)
+	sagaRepo := repository.NewPostgresSagaRepository(db)
+
+	// Khởi chạy Outbox Publisher Worker chạy ngầm
+	outboxPub := outbox.NewPublisher(outboxRepo, rabbitRepo, redisRepo)
+	go outboxPub.Start(context.Background())
+
+	// Khởi tạo HTTP Client kết nối tới blockchain-service độc lập
+	blockchainServiceURL := os.Getenv("BLOCKCHAIN_SERVICE_URL")
+	if blockchainServiceURL == "" {
+		blockchainServiceURL = "http://blockchain-service:50052"
+	}
+	blockchainClient := saga.NewBlockchainClient(blockchainServiceURL)
+
+	// Khởi chạy Saga Orchestrator Worker chạy ngầm
+	rabbitURL := os.Getenv("RABBITMQ_URL")
+	if rabbitURL == "" {
+		rabbitURL = "amqp://guest:guest@rabbitmq:5672/"
+	}
+	sagaOrch, err := saga.NewOrchestrator(db, sagaRepo, nftRepo, blockchainClient, rabbitURL)
+	if err != nil {
+		slog.Error("❌ Saga: Lỗi khởi chạy Saga Orchestrator", "error", err)
+		os.Exit(1)
+	}
+	defer sagaOrch.Close()
+	if err := sagaOrch.Start(context.Background()); err != nil {
+		slog.Error("❌ Saga: Lỗi bắt đầu Saga Orchestrator", "error", err)
+		os.Exit(1)
+	}
+
+	// Khởi tạo gRPC Handler nhận Postgres, Redis, RabbitMQ, Outbox & Saga để thực hiện Transaction
+	nftGRPCHandler := handler.NewBiddingGRPCHandler(nftUsecase, redisRepo, rabbitRepo, db, outboxRepo, sagaRepo)
 	grpcServer := grpc.NewServer()
 	pb.RegisterBiddingServiceServer(grpcServer, nftGRPCHandler)
 

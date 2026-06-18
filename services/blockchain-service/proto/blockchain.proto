@@ -1,0 +1,32 @@
+syntax = "proto3";
+
+package blockchain;
+
+option go_package = "blockchain-service/proto";
+
+service BlockchainService {
+  rpc MintNFT (MintNFTRequest) returns (MintNFTResponse);
+  rpc TransferNFT (TransferNFTRequest) returns (TransferNFTResponse);
+}
+
+message MintNFTRequest {
+  string token_uri = 1;
+}
+
+message MintNFTResponse {
+  bool success = 1;
+  string tx_hash = 2;
+  string message = 3;
+}
+
+message TransferNFTRequest {
+  int64 token_id = 1;
+  string new_owner = 2;
+  double price = 3;
+}
+
+message TransferNFTResponse {
+  bool success = 1;
+  string tx_hash = 2;
+  string message = 3;
+}

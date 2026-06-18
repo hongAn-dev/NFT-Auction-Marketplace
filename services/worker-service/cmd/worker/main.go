@@ -160,6 +160,25 @@ func runRoyaltyWorker(channel *amqp.Channel, queueName string, db *gorm.DB) {
 		log.Fatalf("❌ Royalty Worker: Lỗi bắt đầu consume: %v", err)
 	}
 
+	publishOutcome := func(routingKey string, payload interface{}) {
+		body, _ := json.Marshal(payload)
+		err := channel.Publish(
+			"nft.events",
+			routingKey,
+			false,
+			false,
+			amqp.Publishing{
+				ContentType: "application/json",
+				Body:        body,
+			},
+		)
+		if err != nil {
+			log.Printf("⚠️ Royalty Worker: Lỗi publish callback event %s: %v\n", routingKey, err)
+		} else {
+			log.Printf("📢 Royalty Worker: Đã publish callback event %s thành công.\n", routingKey)
+		}
+	}
+
 	fmt.Println("💰 Royalty Worker đã sẵn sàng lắng nghe sự kiện...")
 	for d := range msgs {
 		var event struct {
@@ -174,6 +193,13 @@ func runRoyaltyWorker(channel *amqp.Channel, queueName string, db *gorm.DB) {
 		if err != nil {
 			log.Printf("⚠️ Royalty Worker: Lỗi unmarshal. Đẩy vào DLQ! Lỗi: %v\n", err)
 			_ = d.Nack(false, false)
+			// Trả về callback thất bại của Saga
+			publishOutcome("royalty.failed", map[string]interface{}{
+				"saga_id": event.BidID,
+				"bid_id":  event.BidID,
+				"nft_id":  event.NFTID,
+				"error":   "Unmarshal payload error",
+			})
 			continue
 		}
 
@@ -181,6 +207,12 @@ func runRoyaltyWorker(channel *amqp.Channel, queueName string, db *gorm.DB) {
 		if event.Amount <= 0 {
 			log.Printf("⚠️ Royalty Worker: Giá trị giao dịch %.2f không hợp lệ! Đẩy vào DLQ.\n", event.Amount)
 			_ = d.Nack(false, false)
+			publishOutcome("royalty.failed", map[string]interface{}{
+				"saga_id": event.BidID,
+				"bid_id":  event.BidID,
+				"nft_id":  event.NFTID,
+				"error":   fmt.Sprintf("Invalid amount: %.2f", event.Amount),
+			})
 			continue
 		}
 
@@ -209,6 +241,13 @@ func runRoyaltyWorker(channel *amqp.Channel, queueName string, db *gorm.DB) {
 			royaltyFee, event.Amount, event.UserID)
 
 		_ = d.Ack(false)
+
+		// Trả về callback thành công của Saga
+		publishOutcome("royalty.processed", map[string]interface{}{
+			"saga_id": event.BidID,
+			"bid_id":  event.BidID,
+			"nft_id":  event.NFTID,
+		})
 	}
 }
 

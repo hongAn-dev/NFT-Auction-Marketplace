@@ -65,7 +65,7 @@ func InitRabbitMQ() (*RabbitMQRepository, error) {
 	if err != nil {
 		channel.Close()
 		conn.Close()
-		return nil, fmt.Errorf("lỗi khai báo Exchange '%s': %w", err)
+		return nil, fmt.Errorf("lỗi khai báo Exchange '%s': %v", exchangeName, err)
 	}
 
 	fmt.Println("✅ Kết nối RabbitMQ thành công và khai báo Exchange 'nft.events' hoàn tất!")
