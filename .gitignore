@@ -48,3 +48,4 @@ services/bidding-service/uploads/
 # Go compiled binaries (without extension)
 services/bidding-service/server
 services/worker-service/worker
+services/blockchain-service/server
