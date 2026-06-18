@@ -1,0 +1,80 @@
+name: Continuous Integration
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  go-services:
+    name: Go Microservices (Build & Test)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [bidding-service, blockchain-service, worker-service]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: true
+          cache-dependency-path: nft-auction/services/${{ matrix.service }}/go.sum
+
+      - name: Install dependencies
+        run: |
+          cd nft-auction/services/${{ matrix.service }}
+          go mod download
+
+      - name: Build service
+        run: |
+          cd nft-auction/services/${{ matrix.service }}
+          go build -v ./...
+
+      - name: Run unit tests
+        run: |
+          cd nft-auction/services/${{ matrix.service }}
+          go test -v ./...
+
+  node-services:
+    name: Node.js Microservices (Lint & Build)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [api-gateway, auth-service, web]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: nft-auction/services/${{ matrix.service }}/package-lock.json
+
+      - name: Install dependencies
+        run: |
+          cd nft-auction/services/${{ matrix.service }}
+          npm ci
+
+      - name: Run Prisma generate (auth-service only)
+        if: matrix.service == 'auth-service'
+        run: |
+          cd nft-auction/services/auth-service
+          npx prisma generate
+
+      - name: Run Lint
+        run: |
+          cd nft-auction/services/${{ matrix.service }}
+          npm run lint --if-present
+
+      - name: Build service
+        run: |
+          cd nft-auction/services/${{ matrix.service }}
+          npm run build
