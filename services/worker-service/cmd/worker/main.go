@@ -7,6 +7,8 @@ import (
 	"os"
 	"time"
 
+	"net/http"
+
 	amqp "github.com/rabbitmq/amqp091-go"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -123,8 +125,20 @@ func main() {
 	// B. ROYALTY FEE WORKER CONSUMER
 	go runRoyaltyWorker(channel, royaltyQueue, db)
 
-	// Giữ cho luồng chính luôn chạy ngầm
-	select {}
+	// ── 5. MỞ MỘT CỔNG HTTP ĐỂ RENDER HEALTH CHECK MIỄN PHÍ ───────────
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("Worker Service is running!"))
+	})
+	log.Printf("Health check server listening on port %s", port)
+	err = http.ListenAndServe(":"+port, nil)
+	if err != nil {
+		log.Fatalf("Lỗi khởi chạy mock HTTP server: %v", err)
+	}
 }
 
 // 📧 EMAIL WORKER: In log giả lập gửi email thông báo
