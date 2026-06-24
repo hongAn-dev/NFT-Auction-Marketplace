@@ -36,19 +36,32 @@ export class BiddingGateway
   }
 
   private initRedisSubscriber() {
-    const redisHost = process.env.REDIS_HOST || 'localhost';
-    const redisPort = parseInt(process.env.REDIS_PORT || '6379', 10);
+    const redisUrl = process.env.REDIS_URL;
+    if (redisUrl) {
+      this.logger.log(`🔍 Đang khởi tạo Redis Subscriber kết nối bằng REDIS_URL...`);
+      this.redisSubscriber = new Redis(redisUrl, {
+        tls: {
+          rejectUnauthorized: false
+        },
+        retryStrategy: (times) => Math.min(times * 100, 2000),
+      });
+    } else {
+      const redisHost = process.env.REDIS_HOST || 'localhost';
+      const redisPort = parseInt(process.env.REDIS_PORT || '6379', 10);
+      const redisPassword = process.env.REDIS_PASSWORD || undefined;
 
-    this.logger.log(`🔍 Đang khởi tạo Redis Subscriber kết nối tới ${redisHost}:${redisPort}...`);
+      this.logger.log(`🔍 Đang khởi tạo Redis Subscriber kết nối tới ${redisHost}:${redisPort}...`);
 
-    this.redisSubscriber = new Redis({
-      host: redisHost,
-      port: redisPort,
-      retryStrategy: (times) => {
-        // Tự động kết nối lại sau 2 giây nếu bị ngắt kết nối
-        return Math.min(times * 100, 2000);
-      },
-    });
+      this.redisSubscriber = new Redis({
+        host: redisHost,
+        port: redisPort,
+        password: redisPassword,
+        retryStrategy: (times) => {
+          // Tự động kết nối lại sau 2 giây nếu bị ngắt kết nối
+          return Math.min(times * 100, 2000);
+        },
+      });
+    }
 
     this.redisSubscriber.on('connect', () => {
       this.logger.log('✅ Redis Subscriber kết nối thành công!');

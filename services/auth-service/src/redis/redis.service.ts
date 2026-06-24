@@ -7,15 +7,24 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(RedisService.name);
 
   async onModuleInit() {
-    const host = process.env.REDIS_HOST || 'localhost';
-    const port = parseInt(process.env.REDIS_PORT || '6379', 10);
-    const password = process.env.REDIS_PASSWORD || undefined;
+    const redisUrl = process.env.REDIS_URL;
+    if (redisUrl) {
+      this.client = new Redis(redisUrl, {
+        tls: {
+          rejectUnauthorized: false
+        }
+      });
+    } else {
+      const host = process.env.REDIS_HOST || 'localhost';
+      const port = parseInt(process.env.REDIS_PORT || '6379', 10);
+      const password = process.env.REDIS_PASSWORD || undefined;
 
-    this.client = new Redis({
-      host,
-      port,
-      password,
-    });
+      this.client = new Redis({
+        host,
+        port,
+        password,
+      });
+    }
 
     this.client.on('connect', () => {
       this.logger.log('🔑 Connected to Redis successfully');

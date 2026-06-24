@@ -9,14 +9,26 @@ export class JwtAuthGuard implements CanActivate {
   private readonly jwtSecret = process.env.JWT_SECRET || 'your-super-secret-key-change-this';
 
   constructor() {
-    const redisHost = process.env.REDIS_HOST || 'localhost';
-    const redisPort = parseInt(process.env.REDIS_PORT || '6379', 10);
-    
-    this.redisClient = new Redis({
-      host: redisHost,
-      port: redisPort,
-      lazyConnect: true, // Only connect when needed or during bootstrap
-    });
+    const redisUrl = process.env.REDIS_URL;
+    if (redisUrl) {
+      this.redisClient = new Redis(redisUrl, {
+        lazyConnect: true,
+        tls: {
+          rejectUnauthorized: false
+        }
+      });
+    } else {
+      const redisHost = process.env.REDIS_HOST || 'localhost';
+      const redisPort = parseInt(process.env.REDIS_PORT || '6379', 10);
+      const redisPassword = process.env.REDIS_PASSWORD || undefined;
+      
+      this.redisClient = new Redis({
+        host: redisHost,
+        port: redisPort,
+        password: redisPassword,
+        lazyConnect: true, // Only connect when needed or during bootstrap
+      });
+    }
     
     this.redisClient.connect().catch((err) => {
       this.logger.error('❌ Failed to connect to Redis inside JwtAuthGuard:', err);

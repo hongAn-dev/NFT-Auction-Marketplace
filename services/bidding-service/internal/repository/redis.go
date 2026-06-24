@@ -23,24 +23,41 @@ type RedisRepository struct {
 
 // InitRedis khởi tạo kết nối và cấu hình Redis Client cục bộ
 func InitRedis() (*RedisRepository, error) {
-	host := os.Getenv("REDIS_HOST")
-	if host == "" {
-		host = "localhost"
-	}
-	port := os.Getenv("REDIS_PORT")
-	if port == "" {
-		port = "6379"
-	}
+	redisURL := os.Getenv("REDIS_URL")
+	var client *redis.Client
 
-	addr := fmt.Sprintf("%s:%s", host, port)
-	fmt.Printf("🔍 Đang kết nối tới Redis tại: %s...\n", addr)
+	if redisURL != "" {
+		fmt.Println("🔍 Đang kết nối tới Redis bằng REDIS_URL...")
+		opt, err := redis.ParseURL(redisURL)
+		if err != nil {
+			return nil, fmt.Errorf("lỗi phân tích cú pháp REDIS_URL: %w", err)
+		}
+		if opt.TLSConfig != nil {
+			opt.TLSConfig.InsecureSkipVerify = true
+		}
+		client = redis.NewClient(opt)
+	} else {
+		host := os.Getenv("REDIS_HOST")
+		if host == "" {
+			host = "localhost"
+		}
+		port := os.Getenv("REDIS_PORT")
+		if port == "" {
+			port = "6379"
+		}
 
-	client := redis.NewClient(&redis.Options{
-		Addr:     addr,
-		Password: "", // Không dùng mật khẩu ở chế độ dev
-		DB:       0,  // DB mặc định
-		PoolSize: 20, // Số lượng kết nối duy trì tối đa trong pool
-	})
+		addr := fmt.Sprintf("%s:%s", host, port)
+		fmt.Printf("🔍 Đang kết nối tới Redis tại: %s...\n", addr)
+
+		password := os.Getenv("REDIS_PASSWORD")
+
+		client = redis.NewClient(&redis.Options{
+			Addr:     addr,
+			Password: password, // Sử dụng mật khẩu từ biến môi trường
+			DB:       0,        // DB mặc định
+			PoolSize: 20,        // Số lượng kết nối duy trì tối đa trong pool
+		})
+	}
 
 	// Thử gửi lệnh PING để kiểm tra xem Redis đã thực sự hoạt động chưa
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
