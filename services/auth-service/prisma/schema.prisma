@@ -20,14 +20,28 @@ model User {
 }
 
 model FiatTransaction {
-  id             String   @id @default(uuid())
-  userId         String   @map("user_id")
-  amount         Float
-  gatewayRefId   String   @unique @map("gateway_ref_id")
-  status         String   // PENDING, SUCCESS, FAILED
-  createdAt      DateTime @default(now()) @map("created_at")
-  updatedAt      DateTime @updatedAt @map("updated_at")
+  id              String   @id @default(uuid())
+  userId          String   @map("user_id")
+  amount          Float
+  gatewayRefId    String   @unique @map("gateway_ref_id")
+  status          String   // PENDING, SUCCESS, FAILED
+  type            String   @default("DEPOSIT") // DEPOSIT or WITHDRAW
+  bankAccountInfo String?  @map("bank_account_info")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
 
   @@map("fiat_transactions")
+}
+
+model UserBankAccount {
+  id          String   @id @default(uuid())
+  userId      String   @map("user_id")
+  bankCode    String   @map("bank_code")
+  bankName    String   @map("bank_name")
+  accountNo   String   @map("account_no")
+  accountName String   @map("account_name")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@map("user_bank_accounts")
 }
 

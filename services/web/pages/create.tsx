@@ -5,6 +5,8 @@ import { useRouter } from 'next/router';
 import { ArrowLeft, Upload, HelpCircle, HardDrive, Server } from 'lucide-react';
 import { useToast } from '../context/ToastContext';
 
+const BIDDING_SERVICE_URL = process.env.NEXT_PUBLIC_BIDDING_SERVICE_URL || 'http://localhost:8080';
+
 export default function CreateNFT() {
   const router = useRouter();
   const { showToast } = useToast();
@@ -55,7 +57,7 @@ export default function CreateNFT() {
       // ── BƯỚC 1: LẤY PRESIGNED UPLOAD URL TỪ GO SERVICE ──────────────────
       let presignData;
       try {
-        const res = await fetch(`http://localhost:8080/api/v1/s3/presign?file=${filename}&type=${selectedFile.type}`);
+        const res = await fetch(`${BIDDING_SERVICE_URL}/api/v1/s3/presign?file=${filename}&type=${selectedFile.type}`);
         if (!res.ok) throw new Error('Handshake rejected');
         presignData = await res.json();
       } catch (err) {
@@ -106,7 +108,7 @@ export default function CreateNFT() {
       let nftCreatedSuccessfully = false;
 
       try {
-        const createRes = await fetch('http://localhost:8080/api/v1/nfts', {
+        const createRes = await fetch(`${BIDDING_SERVICE_URL}/api/v1/nfts`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(nftPayload)
@@ -134,7 +136,7 @@ export default function CreateNFT() {
 
       if (nftCreatedSuccessfully) {
         try {
-          await fetch(`http://localhost:8080/api/v1/nfts/${nftId}/metadata`, {
+          await fetch(`${BIDDING_SERVICE_URL}/api/v1/nfts/${nftId}/metadata`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(metadataPayload)

@@ -5,6 +5,8 @@ import { User, Key, Mail, ShieldAlert } from 'lucide-react';
 import { saveTokens, isAuthenticated } from '../utils/auth';
 import { useToast } from '../context/ToastContext';
 
+const API_GATEWAY_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
+
 export default function AuthPage() {
   const router = useRouter();
   const { showToast } = useToast();
@@ -27,14 +29,13 @@ export default function AuthPage() {
     e.preventDefault();
     setLoading(true);
 
-    const apiGatewayUrl = 'http://localhost:4000';
     const endpoint = isLogin ? '/api/auth/login' : '/api/auth/register';
     const payload = isLogin 
       ? { email, password } 
       : { email, password, name };
 
     try {
-      const res = await fetch(`${apiGatewayUrl}${endpoint}`, {
+      const res = await fetch(`${API_GATEWAY_URL}${endpoint}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -85,8 +86,7 @@ export default function AuthPage() {
       
       // 3. Request cryptographic Nonce from Backend
       setWeb3Status('FETCHING CRYPTO NONCE...');
-      const apiGatewayUrl = 'http://localhost:4000';
-      const nonceRes = await fetch(`${apiGatewayUrl}/api/auth/web3/nonce`, {
+      const nonceRes = await fetch(`${API_GATEWAY_URL}/api/auth/web3/nonce`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ address })
@@ -108,7 +108,7 @@ export default function AuthPage() {
 
       // 5. Verify Signature with Backend
       setWeb3Status('VERIFYING AUTHENTICITY...');
-      const verifyRes = await fetch(`${apiGatewayUrl}/api/auth/web3/verify`, {
+      const verifyRes = await fetch(`${API_GATEWAY_URL}/api/auth/web3/verify`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ address, signature })

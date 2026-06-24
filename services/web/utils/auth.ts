@@ -60,7 +60,7 @@ export function isAuthenticated(): boolean {
   return !!getAccessToken();
 }
 
-export async function logoutUser(apiGatewayUrl: string = 'http://localhost:4000'): Promise<boolean> {
+export async function logoutUser(apiGatewayUrl: string = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000'): Promise<boolean> {
   const token = getAccessToken();
   clearTokens();
   

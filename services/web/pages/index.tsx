@@ -138,7 +138,10 @@ export const getServerSideProps: GetServerSideProps = async () => {
   let nfts: NFT[] = [];
   let errorMsg = '';
 
-  const backendUrls = [
+  const biddingServiceEnv = process.env.NEXT_PUBLIC_BIDDING_SERVICE_URL;
+  const backendUrls = biddingServiceEnv ? [
+    `${biddingServiceEnv}/api/v1/nfts`
+  ] : [
     'http://bidding-service:8080/api/v1/nfts',  // Docker internal DNS
     'http://localhost:8080/api/v1/nfts'        // Host machine fallback
   ];

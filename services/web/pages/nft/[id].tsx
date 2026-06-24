@@ -7,6 +7,9 @@ import { ArrowLeft, Clock, Shield, Award, Database, FileText, Lock } from 'lucid
 import { getUserProfile, getAccessToken, UserProfile } from '../../utils/auth';
 import { useToast } from '../../context/ToastContext';
 
+const API_GATEWAY_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
+const BIDDING_SERVICE_URL = process.env.NEXT_PUBLIC_BIDDING_SERVICE_URL || 'http://localhost:8080';
+
 interface NFT {
   id: string;
   title: string;
@@ -114,7 +117,7 @@ export default function NFTDetail({ nft, metadata, initialHighestBid, error }: D
           const token = getAccessToken();
           if (!token) return;
           try {
-            const res = await fetch('http://localhost:4000/api/auth/payment/balance', {
+            const res = await fetch(`${API_GATEWAY_URL}/api/auth/payment/balance`, {
               headers: { Authorization: `Bearer ${token}` }
             });
             const data = await res.json();
@@ -156,7 +159,7 @@ export default function NFTDetail({ nft, metadata, initialHighestBid, error }: D
   // WebSockets Realtime bidding updates
   useEffect(() => {
     // Connect to NestJS BFF Gateway
-    const socket = io('http://localhost:4000', {
+    const socket = io(API_GATEWAY_URL, {
       transports: ['websocket'],
       forceNew: true
     });
@@ -261,7 +264,7 @@ export default function NFTDetail({ nft, metadata, initialHighestBid, error }: D
         throw new Error('Authentication is required to place a bid. Please log in.');
       }
 
-      const res = await fetch('http://localhost:4000/api/v1/bids', {
+      const res = await fetch(`${API_GATEWAY_URL}/api/v1/bids`, {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
@@ -555,7 +558,10 @@ export const getServerSideProps: GetServerSideProps = async (context) => {
   let initialHighestBid: HighestBid | null = null;
   let errorMsg = '';
 
-  const backendUrls = [
+  const biddingServiceEnv = process.env.NEXT_PUBLIC_BIDDING_SERVICE_URL;
+  const backendUrls = biddingServiceEnv ? [
+    `${biddingServiceEnv}/api/v1/nfts/${id}`
+  ] : [
     `http://bidding-service:8080/api/v1/nfts/${id}`,
     `http://localhost:8080/api/v1/nfts/${id}`
   ];
@@ -583,7 +589,10 @@ export const getServerSideProps: GetServerSideProps = async (context) => {
 
   // If NFT fetched successfully, get the highest bid from api-gateway BFF
   if (nft) {
-    const gatewayUrls = [
+    const apiGatewayEnv = process.env.NEXT_PUBLIC_API_URL;
+    const gatewayUrls = apiGatewayEnv ? [
+      `${apiGatewayEnv}/api/v1/nfts/${id}/highest-bid`
+    ] : [
       `http://api-gateway:4000/api/v1/nfts/${id}/highest-bid`,
       `http://localhost:4000/api/v1/nfts/${id}/highest-bid`
     ];
