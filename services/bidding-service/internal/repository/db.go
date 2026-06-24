@@ -35,7 +35,10 @@ func InitDB() (*gorm.DB, error) {
 	}
 
 	// Thực hiện mở kết nối đến CSDL
-	db, err := gorm.Open(postgres.Open(dsn), gormConfig)
+	db, err := gorm.Open(postgres.New(postgres.Config{
+		DSN:                  dsn,
+		PreferSimpleProtocol: true, // Tắt prepared statement cache để tương thích với PgBouncer/Supabase Connection Pooler
+	}), gormConfig)
 	if err != nil {
 		return nil, fmt.Errorf("không thể kết nối tới cơ sở dữ liệu: %w", err)
 	}

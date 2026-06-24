@@ -150,7 +150,10 @@ func initDB() (*gorm.DB, error) {
 	var err error
 
 	for i := 1; i <= 5; i++ {
-		db, err = gorm.Open(postgres.Open(dsn), &gorm.Config{})
+		db, err = gorm.Open(postgres.New(postgres.Config{
+			DSN:                  dsn,
+			PreferSimpleProtocol: true, // Tắt prepared statement cache để tương thích với PgBouncer/Supabase Connection Pooler
+		}), &gorm.Config{})
 		if err == nil {
 			break
 		}
