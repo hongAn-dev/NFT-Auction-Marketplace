@@ -61,8 +61,9 @@ export class PaymentService {
         throw new UnauthorizedException('Thiếu mã xác thực Webhook');
       }
       
-      const expectedToken = `Bearer ${this.webhookToken}`;
-      if (authHeader !== expectedToken) {
+      const expectedBearerToken = `Bearer ${this.webhookToken}`;
+      const expectedApiKeyToken = `Apikey ${this.webhookToken}`;
+      if (authHeader !== expectedBearerToken && authHeader !== expectedApiKeyToken && authHeader !== this.webhookToken) {
         console.warn(`[SePay Webhook] Unauthorized request. Received: ${authHeader}`);
         throw new UnauthorizedException('Mã xác thực Webhook không hợp lệ');
       }
