@@ -69,7 +69,7 @@ export class PaymentService {
       }
 
       // 2. Trích xuất thông tin giao dịch từ request body của SePay
-      const content = body.transactionContent || '';
+      const content = body.description || body.content || body.transactionContent || '';
       const match = content.match(/NFT\d+/i);
       if (!match) {
         console.warn(`[SePay Webhook] No matching NFT code pattern found in: ${content}`);
@@ -77,7 +77,7 @@ export class PaymentService {
       }
       
       const memo = match[0].toUpperCase();
-      const amountIn = Number(body.amountIn || 0);
+      const amountIn = Number(body.transferAmount || body.amountIn || body.amount || 0);
 
       // 3. Tìm kiếm transaction PENDING trong database
       const transaction = await this.prisma.fiatTransaction.findUnique({
