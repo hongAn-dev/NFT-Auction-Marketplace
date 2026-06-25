@@ -5,6 +5,7 @@ import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcryptjs';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
+import { verifyMessage } from 'ethers';
 
 @Injectable()
 export class AuthService {
@@ -148,8 +149,7 @@ export class AuthService {
     const message = `Đăng nhập vào Curatorial NFT. Nonce của bạn là: ${cachedNonce}`;
     let recoveredAddress: string;
     try {
-      const { ethers } = require('ethers');
-      recoveredAddress = ethers.verifyMessage(message, signature);
+      recoveredAddress = verifyMessage(message, signature);
     } catch (err) {
       throw new UnauthorizedException('Chữ ký số cung cấp không hợp lệ');
     }
