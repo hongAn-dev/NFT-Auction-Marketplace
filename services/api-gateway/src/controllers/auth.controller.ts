@@ -7,8 +7,19 @@ export class AuthController {
 
   @All('*')
   async proxyAuth(@Req() req: Request, @Res() res: Response) {
-    const path = req.params[0] || '';
-    const url = `${this.authServiceUrl}/auth/${path}`;
+    let path = req.params[0] || '';
+    // Xóa dấu gạch chéo ở đầu path nếu có để tránh lỗi double-slash //
+    if (path.startsWith('/')) {
+      path = path.substring(1);
+    }
+    
+    let baseUrl = this.authServiceUrl;
+    // Xóa dấu gạch chéo ở cuối baseUrl nếu có
+    if (baseUrl.endsWith('/')) {
+      baseUrl = baseUrl.slice(0, -1);
+    }
+    
+    const url = `${baseUrl}/auth/${path}`;
     
     try {
       const headers = { ...req.headers } as Record<string, string>;
