@@ -23,6 +23,8 @@ import (
 	"github.com/gin-gonic/gin"
 	swaggerFiles "github.com/swaggo/files"
 	ginSwagger "github.com/swaggo/gin-swagger"
+	"golang.org/x/net/http2"
+	"golang.org/x/net/http2/h2c"
 	"google.golang.org/grpc"
 )
 
@@ -146,33 +148,13 @@ func main() {
 		})
 	})
 
-	// ── CẤU HÌNH CỔNG CHẠY HỆ THỐNG ────────────────────────────────
-	restPort := os.Getenv("APP_PORT")
-	if restPort == "" {
-		restPort = "8080"
-	}
-
-	grpcPort := os.Getenv("GRPC_PORT")
-	if grpcPort == "" {
-		grpcPort = "50051"
-	}
-
-	// ── KHỞI CHẠY SONG SONG REST VÀ gRPC SERVERS ─────────────────────
-	
-	// A. Chạy REST API Server trên một Goroutine độc lập (bất đồng bộ)
-	go func() {
-		slog.Info("🔥 REST API Server đang hoạt động", "url", "http://localhost:"+restPort)
-		slog.Info("👉 Xem tài liệu API Swagger tại", "url", "http://localhost:"+restPort+"/swagger/index.html")
-		if err := router.Run(":" + restPort); err != nil {
-			slog.Warn("⚠️ Lỗi hoặc đã dừng REST Server", "error", err)
+	// ── CẤU HÌNH CỔNG CHẠY HỆ THỐNG (MULTIPLEXED SINGLE PORT) ─────────
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = os.Getenv("APP_PORT")
+		if port == "" {
+			port = "8080"
 		}
-	}()
-
-	// B. Chạy gRPC Server trên luồng chính
-	lis, err := net.Listen("tcp", ":"+grpcPort)
-	if err != nil {
-		slog.Error("❌ gRPC: Lỗi lắng nghe cổng", "port", grpcPort, "error", err)
-		os.Exit(1)
 	}
 
 	outboxRepo := repository.NewPostgresOutboxRepository(db)
@@ -210,9 +192,25 @@ func main() {
 	grpcServer := grpc.NewServer()
 	pb.RegisterBiddingServiceServer(grpcServer, nftGRPCHandler)
 
-	slog.Info("⚡ gRPC Server đang lắng nghe kết nối", "port", grpcPort)
-	if err := grpcServer.Serve(lis); err != nil {
-		slog.Error("❌ gRPC: Lỗi không thể phục vụ dịch vụ", "error", err)
+	// Multiplexing Handler: Tự động phân chia luồng gRPC/HTTP2 và HTTP/1.1 REST
+	mixedHandler := h2c.NewHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.ProtoMajor == 2 && strings.HasPrefix(r.Header.Get("Content-Type"), "application/grpc") {
+			grpcServer.ServeHTTP(w, r)
+		} else {
+			router.ServeHTTP(w, r)
+		}
+	}), &http2.Server{})
+
+	slog.Info("🔥 Multiplexed Server (Gin REST + gRPC) đang lắng nghe kết nối", "port", port)
+	slog.Info("👉 Xem tài liệu API Swagger tại", "url", "http://localhost:"+port+"/swagger/index.html")
+
+	server := &http.Server{
+		Addr:    ":" + port,
+		Handler: mixedHandler,
+	}
+
+	if err := server.ListenAndServe(); err != nil {
+		slog.Error("❌ Server: Lỗi không thể phục vụ dịch vụ", "error", err)
 		os.Exit(1)
 	}
 }
