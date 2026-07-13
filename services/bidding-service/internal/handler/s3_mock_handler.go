@@ -57,18 +57,20 @@ func (h *S3MockHandler) PresignURL(c *gin.Context) {
 	// Kiểm tra nếu các khoá bắt đầu bằng "cfat_", tức là người dùng cấu hình nhầm API Token thay vì S3 Credentials
 	isApiTokenFormat := (len(r2AccessKeyID) > 5 && r2AccessKeyID[:5] == "cfat_") || (len(r2SecretAccessKey) > 5 && r2SecretAccessKey[:5] == "cfat_")
 
+	// Xác định scheme (http/https) và host động để hỗ trợ cả local và production (Render)
+	scheme := "http"
+	if c.Request.Header.Get("X-Forwarded-Proto") == "https" {
+		scheme = "https"
+	}
+	host := c.Request.Host
+
 	// Nếu đầy đủ cấu hình R2 thật, ta sẽ sinh Presigned URL đi qua Proxy của Go Backend!
 	// Điều này giải quyết TRIỆT ĐỂ lỗi TLS ERR_SSL_VERSION_OR_CIPHER_MISMATCH khi trình duyệt gọi trực tiếp R2 storage.
 	if r2AccountID != "" && r2AccessKeyID != "" && r2SecretAccessKey != "" && r2BucketName != "" && !isApiTokenFormat {
 		slog.Info("R2: Generating proxy upload handshake parameters", "bucket", r2BucketName, "file", filename)
 
-		appPort := os.Getenv("APP_PORT")
-		if appPort == "" {
-			appPort = "8080"
-		}
-
 		// Trình duyệt sẽ PUT trực tiếp lên Go Backend, Go Backend sẽ chuyển tiếp nhị phân lên R2
-		uploadURL := fmt.Sprintf("http://localhost:%s/api/v1/s3/upload?file=%s&storage=r2", appPort, filename)
+		uploadURL := fmt.Sprintf("%s://%s/api/v1/s3/upload?file=%s&storage=r2", scheme, host, filename)
 
 		publicUrlPrefix := r2PublicURL
 		if publicUrlPrefix == "" {
@@ -92,17 +94,11 @@ func (h *S3MockHandler) PresignURL(c *gin.Context) {
 		slog.Info("R2 Keys missing. Activating Local S3 Mock Fallback Sandbox.", "file", filename)
 	}
 	
-	// Sinh ra một URL ký giả lập trỏ về API Gateway / Bidding Service cục bộ
-	appPort := os.Getenv("APP_PORT")
-	if appPort == "" {
-		appPort = "8080"
-	}
-
 	// URL mà Frontend sẽ gửi PUT trực tiếp
-	uploadURL := fmt.Sprintf("http://localhost:%s/api/v1/s3/upload?file=%s", appPort, filename)
+	uploadURL := fmt.Sprintf("%s://%s/api/v1/s3/upload?file=%s", scheme, host, filename)
 	
 	// URL public mà Frontend sẽ đọc ảnh sau khi lưu xong
-	finalPublicURL := fmt.Sprintf("http://localhost:%s/uploads/%s", appPort, filename)
+	finalPublicURL := fmt.Sprintf("%s://%s/uploads/%s", scheme, host, filename)
 
 	c.JSON(http.StatusOK, gin.H{
 		"success":      true,
