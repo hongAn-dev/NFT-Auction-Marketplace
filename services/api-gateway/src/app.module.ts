@@ -4,6 +4,7 @@ import { join } from 'path';
 import { BiddingController } from './controllers/bidding.controller';
 import { AuthController } from './controllers/auth.controller';
 import { BiddingGateway } from './gateways/bidding.gateway';
+import { credentials } from '@grpc/grpc-js';
 
 // Xử lý làm sạch URL kết nối gRPC
 let biddingServiceUrl = process.env.BIDDING_SERVICE_URL || 'localhost:50051';
@@ -26,6 +27,9 @@ if (!biddingServiceUrl.includes(':')) {
           package: 'bidding',
           protoPath: join(process.cwd(), 'proto/bidding.proto'),
           url: biddingServiceUrl,
+          credentials: biddingServiceUrl.includes(':443')
+            ? credentials.createSsl()
+            : credentials.createInsecure(),
           loader: {
             keepCase: true,
           },
