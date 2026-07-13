@@ -56,6 +56,8 @@ export default function NFTDetail({ nft, metadata, initialHighestBid, error }: D
   const [ethBalance, setEthBalance] = useState<string | null>(null);
   const socketRef = useRef<Socket | null>(null);
 
+  const [bidCurrency, setBidCurrency] = useState<'VND' | 'ETH'>('VND');
+
   const formatVND = (amountInUSD: number) => {
     return `${(amountInUSD * 25000).toLocaleString('vi-VN')} VND`;
   };
@@ -70,7 +72,7 @@ export default function NFTDetail({ nft, metadata, initialHighestBid, error }: D
 
   const handleBidAmountChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const value = e.target.value;
-    if (user && !user.email.endsWith('@web3.auth')) {
+    if (bidCurrency === 'VND') {
       const clean = value.replace(/\D/g, '');
       if (clean === '') {
         setBidAmount('');
@@ -86,6 +88,11 @@ export default function NFTDetail({ nft, metadata, initialHighestBid, error }: D
     }
   };
 
+  const handleCurrencyChange = (currency: 'VND' | 'ETH') => {
+    setBidCurrency(currency);
+    setBidAmount('');
+  };
+
   useEffect(() => {
     setIsClient(true);
     const profile = getUserProfile();
@@ -94,6 +101,29 @@ export default function NFTDetail({ nft, metadata, initialHighestBid, error }: D
     if (profile) {
       const email = profile.email || '';
       const isWeb3 = email.endsWith('@web3.auth');
+      
+      // Mặc định chọn ETH cho Web3 và VND cho Web2
+      setBidCurrency(isWeb3 ? 'ETH' : 'VND');
+
+      // Luôn tải số dư tiền mặt (VND) của mọi User từ database
+      const fetchWeb2Balance = async () => {
+        const token = getAccessToken();
+        if (!token) return;
+        try {
+          const res = await fetch(`${API_GATEWAY_URL}/api/auth/payment/balance`, {
+            headers: { Authorization: `Bearer ${token}` }
+          });
+          const data = await res.json();
+          if (res.ok && data.success) {
+            setBalance(data.data.balance);
+          }
+        } catch (err) {
+          console.error('Failed to fetch Web2 balance:', err);
+        }
+      };
+      fetchWeb2Balance();
+
+      // Nếu là Web3, tải thêm số dư ví ETH từ MetaMask
       if (isWeb3) {
         const address = email.split('@')[0];
         if (address.startsWith('0x') && typeof window !== 'undefined' && (window as any).ethereum) {
@@ -112,23 +142,6 @@ export default function NFTDetail({ nft, metadata, initialHighestBid, error }: D
           };
           fetchEthBalance();
         }
-      } else {
-        const fetchWeb2Balance = async () => {
-          const token = getAccessToken();
-          if (!token) return;
-          try {
-            const res = await fetch(`${API_GATEWAY_URL}/api/auth/payment/balance`, {
-              headers: { Authorization: `Bearer ${token}` }
-            });
-            const data = await res.json();
-            if (res.ok && data.success) {
-              setBalance(data.data.balance);
-            }
-          } catch (err) {
-            console.error('Failed to fetch Web2 balance:', err);
-          }
-        };
-        fetchWeb2Balance();
       }
     }
   }, []);
@@ -184,7 +197,7 @@ export default function NFTDetail({ nft, metadata, initialHighestBid, error }: D
         
         // Show live notification toast
         showToast(
-          `New live bid placed: ${user && user.email.endsWith('@web3.auth') ? formatETH(data.amount) : formatVND(data.amount)} by collector ${data.userId.substring(0, 8)}...`,
+          `New live bid placed: ${bidCurrency === 'ETH' ? formatETH(data.amount) : formatVND(data.amount)} by collector ${data.userId.substring(0, 8)}...`,
           'info'
         );
       }
@@ -204,8 +217,8 @@ export default function NFTDetail({ nft, metadata, initialHighestBid, error }: D
 
   const handlePlaceBid = async (e: React.FormEvent) => {
     e.preventDefault();
-    const isWeb3 = user && user.email.endsWith('@web3.auth');
-    const rawAmount = isWeb3 
+    const isETH = bidCurrency === 'ETH';
+    const rawAmount = isETH 
       ? bidAmount.replace(/,/g, '') 
       : bidAmount.replace(/\./g, '').replace(/,/g, '');
 
@@ -219,7 +232,7 @@ export default function NFTDetail({ nft, metadata, initialHighestBid, error }: D
     
     // Convert client-entered bid value to USD base currency
     let bidValInUSD = 0;
-    if (isWeb3) {
+    if (isETH) {
       bidValInUSD = inputVal * 3000;
     } else {
       bidValInUSD = inputVal / 25000;
@@ -227,7 +240,7 @@ export default function NFTDetail({ nft, metadata, initialHighestBid, error }: D
 
     if (bidValInUSD <= currentLimit) {
       showToast(
-        `Your bid must be strictly greater than current value of ${user && user.email.endsWith('@web3.auth') ? formatETH(currentLimit) : formatVND(currentLimit)}`,
+        `Your bid must be strictly greater than current value of ${isETH ? formatETH(currentLimit) : formatVND(currentLimit)}`,
         'error'
       );
       return;
@@ -235,7 +248,7 @@ export default function NFTDetail({ nft, metadata, initialHighestBid, error }: D
 
     // Client-side balance check
     if (user) {
-      if (isWeb3) {
+      if (isETH) {
         if (ethBalance === null) {
           showToast('Still fetching your ETH wallet balance, please try again.', 'error');
           return;
@@ -285,7 +298,7 @@ export default function NFTDetail({ nft, metadata, initialHighestBid, error }: D
       setBidAmount('');
       // Update local balance state immediately
       if (user) {
-        if (isWeb3) {
+        if (isETH) {
           const email = user.email || '';
           const address = email.split('@')[0];
           if (address.startsWith('0x') && typeof window !== 'undefined' && (window as any).ethereum) {
@@ -411,7 +424,7 @@ export default function NFTDetail({ nft, metadata, initialHighestBid, error }: D
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <div>
                 <span style={{ fontSize: '0.75rem', textTransform: 'uppercase', color: '#666', fontWeight: 700, letterSpacing: '0.05em' }}>Value Valuation</span>
-                {user && user.email.endsWith('@web3.auth') ? (
+                {bidCurrency === 'ETH' ? (
                   <div>
                     <h2 style={{ fontSize: '2.5rem', color: 'var(--accent-color)', fontWeight: 800, marginTop: '0.2rem', lineHeight: '1.2' }}>
                       {formatETH(currentPrice)}
@@ -469,9 +482,33 @@ export default function NFTDetail({ nft, metadata, initialHighestBid, error }: D
                   />
                 </div>
 
+                {user.email.endsWith('@web3.auth') && (
+                  <div className="form-group" style={{ marginBottom: '1rem' }}>
+                    <label className="form-label">BIDDING CURRENCY</label>
+                    <div style={{ display: 'flex', gap: '1rem' }}>
+                      <button
+                        type="button"
+                        className={`btn ${bidCurrency === 'ETH' ? 'btn-accent' : ''}`}
+                        style={{ flex: 1, padding: '0.5rem', border: '1px solid #000', background: bidCurrency === 'ETH' ? '' : '#FFF', color: bidCurrency === 'ETH' ? '' : '#000', fontWeight: 700 }}
+                        onClick={() => handleCurrencyChange('ETH')}
+                      >
+                        ETH (MetaMask)
+                      </button>
+                      <button
+                        type="button"
+                        className={`btn ${bidCurrency === 'VND' ? 'btn-accent' : ''}`}
+                        style={{ flex: 1, padding: '0.5rem', border: '1px solid #000', background: bidCurrency === 'VND' ? '' : '#FFF', color: bidCurrency === 'VND' ? '' : '#000', fontWeight: 700 }}
+                        onClick={() => handleCurrencyChange('VND')}
+                      >
+                        VND (fiat balance)
+                      </button>
+                    </div>
+                  </div>
+                )}
+
                 <div className="form-group" style={{ marginBottom: '1.5rem' }}>
                   <label className="form-label" htmlFor="bid-amount">
-                    BID OFFER ({user.email.endsWith('@web3.auth') ? 'ETH' : 'VND'})
+                    BID OFFER ({bidCurrency})
                   </label>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                     <input
@@ -482,13 +519,13 @@ export default function NFTDetail({ nft, metadata, initialHighestBid, error }: D
                       value={bidAmount}
                       onChange={handleBidAmountChange}
                       placeholder={
-                        user.email.endsWith('@web3.auth')
+                        bidCurrency === 'ETH'
                           ? (currentPrice / 3000 + 0.01).toFixed(4)
                           : (currentPrice * 25000 + 10000).toLocaleString('vi-VN')
                       }
                       required
                     />
-                    {user.email.endsWith('@web3.auth') ? (
+                    {bidCurrency === 'ETH' ? (
                       <span style={{ fontSize: '0.75rem', color: '#666' }}>
                         Your Wallet Balance: <strong>{ethBalance !== null ? `${ethBalance} ETH` : 'Loading...'}</strong>
                       </span>
@@ -534,10 +571,10 @@ export default function NFTDetail({ nft, metadata, initialHighestBid, error }: D
                     </div>
                     <div style={{ textAlign: 'right' }}>
                       <div style={{ fontWeight: 800, fontSize: '1.1rem', color: 'var(--accent-color)' }}>
-                        {user && user.email.endsWith('@web3.auth') ? formatETH(b.amount) : formatVND(b.amount)}
+                        {bidCurrency === 'ETH' ? formatETH(b.amount) : formatVND(b.amount)}
                       </div>
                       <div style={{ fontSize: '0.75rem', color: '#666', fontWeight: 600, marginTop: '0.1rem' }}>
-                        ≈ {user && user.email.endsWith('@web3.auth') ? formatVND(b.amount) : formatETH(b.amount)}
+                        ≈ {bidCurrency === 'ETH' ? formatVND(b.amount) : formatETH(b.amount)}
                       </div>
                     </div>
                   </div>
