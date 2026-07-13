@@ -193,7 +193,7 @@ func main() {
 
 	// Multiplexing Handler: Tự động phân chia luồng gRPC/HTTP2 và HTTP/1.1 REST
 	mixedHandler := h2c.NewHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.ProtoMajor == 2 && strings.HasPrefix(r.Header.Get("Content-Type"), "application/grpc") {
+		if strings.HasPrefix(r.Header.Get("Content-Type"), "application/grpc") {
 			grpcServer.ServeHTTP(w, r)
 		} else {
 			router.ServeHTTP(w, r)
