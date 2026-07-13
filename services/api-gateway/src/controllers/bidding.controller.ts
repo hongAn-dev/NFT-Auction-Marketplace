@@ -162,6 +162,7 @@ export class BiddingController implements OnModuleInit {
         message: result.message,
       };
     } catch (err) {
+      console.error('❌ [BiddingController.placeBid] Error occurred:', err);
       if (err instanceof HttpException) {
         throw err;
       }
@@ -202,6 +203,7 @@ export class BiddingController implements OnModuleInit {
         },
       };
     } catch (err) {
+      console.error('❌ [BiddingController.getHighestBid] Error occurred:', err);
       throw new HttpException(
         {
           success: false,
