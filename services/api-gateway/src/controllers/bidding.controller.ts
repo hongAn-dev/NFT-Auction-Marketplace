@@ -92,7 +92,7 @@ export class BiddingController implements OnModuleInit {
         const address = email.split('@')[0];
         try {
           // Query the local Hardhat Node or blockchain service node
-          const rpcUrl = 'http://blockchain-service:8545';
+          const rpcUrl = process.env.BLOCKCHAIN_RPC_URL || 'http://blockchain-service:8545';
           const rpcRes = await fetch(rpcUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -122,9 +122,9 @@ export class BiddingController implements OnModuleInit {
               }
             }
           }
-        } catch (e) {
+        } catch (e: any) {
           if (e instanceof HttpException) throw e;
-          console.warn('EVM RPC node unreachable, relying on frontend Web3 validation:', e);
+          console.warn(`⚠️ EVM RPC node unreachable (${e.message || e}). Relying on frontend Web3 validation.`);
         }
       }
 
