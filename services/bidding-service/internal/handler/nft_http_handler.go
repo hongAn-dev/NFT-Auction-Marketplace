@@ -1,9 +1,11 @@
 package handler
 
 import (
+	"errors"
 	"log/slog"
 	"net/http"
 
+	"bidding-service/internal/auction"
 	"bidding-service/internal/domain"
 	"github.com/gin-gonic/gin"
 )
@@ -12,14 +14,40 @@ import (
 type NFTHTTPHandler struct {
 	usecase      domain.NFTUsecase
 	metadataRepo domain.NFTMetadataRepository
+	lister       *auction.Lister  // đăng bán hàng hiệu có hộ chiếu (docs/23 §7.1)
+	settlements  SettlementReader // trạng thái saga của lot
 }
 
 // NewNFTHTTPHandler khởi tạo đối tượng HTTP handler nhận cả Usecase (SQL/Redis) và MetadataRepo (MongoDB).
-func NewNFTHTTPHandler(uc domain.NFTUsecase, metaRepo domain.NFTMetadataRepository) *NFTHTTPHandler {
+func NewNFTHTTPHandler(uc domain.NFTUsecase, metaRepo domain.NFTMetadataRepository, lister *auction.Lister, settlements SettlementReader) *NFTHTTPHandler {
 	return &NFTHTTPHandler{
 		usecase:      uc,
 		metadataRepo: metaRepo,
+		lister:       lister,
+		settlements:  settlements,
 	}
+}
+
+// lockedLot: lot có hộ chiếu không sửa / xoá được qua API không xác thực (docs/23
+// §5.1) — đổi trạng thái hay xoá lot đang thanh toán sẽ phá saga và ký quỹ.
+func (h *NFTHTTPHandler) lockedLot(c *gin.Context, id string) bool {
+	nft, err := h.usecase.GetNFT(c.Request.Context(), id)
+	if err != nil || nft.PassportID == "" {
+		return false
+	}
+	c.JSON(http.StatusConflict, gin.H{"success": false, "error": gin.H{
+		"code": "LOT_LOCKED", "message": "Món hàng hiệu đã đăng bán không sửa hay xoá được"}})
+	return true
+}
+
+// Settlement: trạng thái saga thanh toán của lot (null nếu chưa đóng phiên).
+func (h *NFTHTTPHandler) Settlement(c *gin.Context) {
+	s, err := h.settlements.SettlementOfLot(c.Request.Context(), c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": gin.H{"code": "READ_FAILED", "message": err.Error()}})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": s})
 }
 
 // RegisterRoutes đăng ký các API endpoints (CRUD) vào Gin Router.
@@ -31,6 +59,7 @@ func (h *NFTHTTPHandler) RegisterRoutes(r *gin.Engine) {
 		api.POST("/nfts", h.Create)
 		api.PUT("/nfts/:id", h.Update)
 		api.DELETE("/nfts/:id", h.Delete)
+		api.GET("/nfts/:id/settlement", h.Settlement)
 
 		// Thêm endpoint ghi Metadata động vào MongoDB
 		api.POST("/nfts/:id/metadata", h.UpsertMetadata)
@@ -140,12 +169,16 @@ func (h *NFTHTTPHandler) GetByID(c *gin.Context) {
 // @Router /api/v1/nfts [post]
 func (h *NFTHTTPHandler) Create(c *gin.Context) {
 	var input struct {
-		ID          string  `json:"id" binding:"required"`
-		Title       string  `json:"title" binding:"required"`
-		Description string  `json:"description"`
-		ImageUrl    string  `json:"image_url" binding:"required,url"`
-		CreatorID   string  `json:"creator_id" binding:"required"`
-		StartPrice  float64 `json:"start_price" binding:"required,gt=0"`
+		ID            string  `json:"id" binding:"required"`
+		Title         string  `json:"title" binding:"required"`
+		Description   string  `json:"description"`
+		ImageUrl      string  `json:"image_url" binding:"required,url"`
+		CreatorID     string  `json:"creator_id" binding:"required"`
+		StartPrice    float64 `json:"start_price" binding:"required,gt=0"`
+		BrandCode     string  `json:"brand_code" binding:"required"`
+		Model         string  `json:"model" binding:"required"`
+		Serial        string  `json:"serial" binding:"required"`
+		DurationHours int     `json:"duration_hours" binding:"required"`
 	}
 
 	if err := c.ShouldBindJSON(&input); err != nil {
@@ -161,18 +194,20 @@ func (h *NFTHTTPHandler) Create(c *gin.Context) {
 		return
 	}
 
-	nft := &domain.NFT{
-		ID:          input.ID,
-		Title:       input.Title,
-		Description: input.Description,
-		ImageUrl:    input.ImageUrl,
-		CreatorID:   input.CreatorID,
-		OwnerID:     input.CreatorID,
-		StartPrice:  input.StartPrice,
-	}
-
 	ctx := c.Request.Context()
-	createdNFT, err := h.usecase.CreateNFT(ctx, nft)
+	createdNFT, err := h.lister.List(ctx, auction.ListingInput{ID: input.ID, Title: input.Title,
+		Description: input.Description, ImageURL: input.ImageUrl, SellerID: input.CreatorID,
+		StartPrice: input.StartPrice, Brand: input.BrandCode, Model: input.Model, Serial: input.Serial,
+		DurationHours: input.DurationHours})
+	var rej *auction.Rejected
+	if errors.As(err, &rej) {
+		status, code := http.StatusBadRequest, "INVALID_INPUT"
+		if rej.Code != "" {
+			status, code = http.StatusConflict, rej.Code // E9: SERIAL_OWNED_BY_OTHER, PASSPORT_LOCKED
+		}
+		c.JSON(status, gin.H{"success": false, "error": gin.H{"code": code, "message": rej.Reason}})
+		return
+	}
 	if err != nil {
 		slog.Error("Failed to create NFT in SQL database", "nft_id", input.ID, "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -207,6 +242,9 @@ func (h *NFTHTTPHandler) Create(c *gin.Context) {
 // @Router /api/v1/nfts/{id} [put]
 func (h *NFTHTTPHandler) Update(c *gin.Context) {
 	id := c.Param("id")
+	if h.lockedLot(c, id) {
+		return
+	}
 	var input struct {
 		Title       string `json:"title"`
 		Description string `json:"description"`
@@ -280,6 +318,9 @@ func (h *NFTHTTPHandler) Update(c *gin.Context) {
 // @Router /api/v1/nfts/{id} [delete]
 func (h *NFTHTTPHandler) Delete(c *gin.Context) {
 	id := c.Param("id")
+	if h.lockedLot(c, id) {
+		return
+	}
 	ctx := c.Request.Context()
 
 	err := h.usecase.DeleteNFT(ctx, id)

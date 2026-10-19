@@ -11,11 +11,14 @@ import (
 	"time"
 
 	_ "bidding-service/docs"
+	"bidding-service/internal/auction"
+	"bidding-service/internal/clients"
+	"bidding-service/internal/domain"
 	"bidding-service/internal/handler"
 	"bidding-service/internal/logger"
 	"bidding-service/internal/outbox"
 	"bidding-service/internal/repository"
-	"bidding-service/internal/saga"
+	"bidding-service/internal/settlement"
 	"bidding-service/internal/usecase"
 	pb "bidding-service/proto"
 
@@ -99,8 +102,23 @@ func main() {
 	// Khởi tạo Usecase nhận cả Postgres Repo và Redis Repo (Dependency Injection)
 	nftUsecase := usecase.NewNFTUsecase(nftRepo, redisRepo)
 
+	// ── PHIÊN ĐẤU GIÁ, KÝ QUỸ, SAGA THANH TOÁN (docs/23) ─────────────
+	serviceToken := os.Getenv("SERVICE_TOKEN")
+	if serviceToken == "" {
+		slog.Error("❌ Thiếu SERVICE_TOKEN — không gọi được ký quỹ ở auth-service")
+		os.Exit(1)
+	}
+	escrow := &clients.Escrow{Base: envOr("AUTH_SERVICE_URL", "http://auth-service:4001"), Token: serviceToken}
+	chain := &clients.Chain{Base: envOr("BLOCKCHAIN_SERVICE_URL", "http://blockchain-service:50052")}
+	store := &repository.AuctionStore{DB: db, Invalidate: func(ctx context.Context, id string) { _ = redisRepo.DeleteNFTCache(ctx, id) }}
+	lister := &auction.Lister{Repo: nftRepo, Check: chain, Now: time.Now}
+	engine := &settlement.Engine{Store: store, Chain: chain, Money: escrow, Now: time.Now}
+	go every(5*time.Second, (&auction.Closer{Store: store, Lock: redisRepo, Now: time.Now}).Tick)
+	go every(2*time.Second, engine.Tick)
+	go every(time.Minute, (&auction.Reconciler{Escrow: escrow, Source: escrow, Bids: store, MinAge: 5 * time.Minute}).Tick)
+
 	// Khởi tạo tầng REST API Handler nhận Usecase (SQL/Redis) và MetadataRepo (MongoDB)
-	nftRESTHandler := handler.NewNFTHTTPHandler(nftUsecase, mongoMetadataRepo)
+	nftRESTHandler := handler.NewNFTHTTPHandler(nftUsecase, mongoMetadataRepo, lister, store)
 
 	// ── CẤU HÌNH WEB ROUTER (GIN) ──────────────────────────────────
 	router := gin.New()
@@ -157,37 +175,19 @@ func main() {
 	}
 
 	outboxRepo := repository.NewPostgresOutboxRepository(db)
-	sagaRepo := repository.NewPostgresSagaRepository(db)
 
-	// Khởi chạy Outbox Publisher Worker chạy ngầm
-	outboxPub := outbox.NewPublisher(outboxRepo, rabbitRepo, redisRepo)
+	// Khởi chạy Outbox Publisher Worker chạy ngầm (escrow.release đi thẳng auth-service)
+	outboxPub := outbox.NewPublisher(outboxRepo, rabbitRepo, redisRepo, escrow)
 	go outboxPub.Start(context.Background())
 
-	// Khởi tạo HTTP Client kết nối tới blockchain-service độc lập
-	blockchainServiceURL := os.Getenv("BLOCKCHAIN_SERVICE_URL")
-	if blockchainServiceURL == "" {
-		blockchainServiceURL = "http://blockchain-service:50052"
+	// Saga cũ (royalty → TransferNFT giả) đã được thay bằng saga thanh toán ở trên.
+	nftGRPCHandler := &handler.BiddingGRPCHandler{
+		Bidder:      &auction.Bidder{Store: store, Escrow: escrow, Now: time.Now, NewID: func() string { return domain.NewID("bid") }},
+		Engine:      engine,
+		Settlements: store,
+		Lock:        redisRepo,
+		Invalidate:  func(ctx context.Context, id string) { _ = redisRepo.DeleteNFTCache(ctx, id) },
 	}
-	blockchainClient := saga.NewBlockchainClient(blockchainServiceURL)
-
-	// Khởi chạy Saga Orchestrator Worker chạy ngầm
-	rabbitURL := os.Getenv("RABBITMQ_URL")
-	if rabbitURL == "" {
-		rabbitURL = "amqp://guest:guest@rabbitmq:5672/"
-	}
-	sagaOrch, err := saga.NewOrchestrator(db, sagaRepo, nftRepo, blockchainClient, rabbitURL)
-	if err != nil {
-		slog.Error("❌ Saga: Lỗi khởi chạy Saga Orchestrator", "error", err)
-		os.Exit(1)
-	}
-	defer sagaOrch.Close()
-	if err := sagaOrch.Start(context.Background()); err != nil {
-		slog.Error("❌ Saga: Lỗi bắt đầu Saga Orchestrator", "error", err)
-		os.Exit(1)
-	}
-
-	// Khởi tạo gRPC Handler nhận Postgres, Redis, RabbitMQ, Outbox & Saga để thực hiện Transaction
-	nftGRPCHandler := handler.NewBiddingGRPCHandler(nftUsecase, redisRepo, rabbitRepo, db, outboxRepo, sagaRepo)
 	grpcServer := grpc.NewServer()
 	pb.RegisterBiddingServiceServer(grpcServer, nftGRPCHandler)
 
@@ -239,5 +239,21 @@ func loadEnv() {
 			val := strings.TrimSpace(parts[1])
 			os.Setenv(key, val)
 		}
+	}
+}
+
+func envOr(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
+}
+
+// every: chạy job định kỳ; một vòng lỗi không dừng vòng sau.
+func every(d time.Duration, job func(context.Context)) {
+	for range time.Tick(d) {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		job(ctx)
+		cancel()
 	}
 }

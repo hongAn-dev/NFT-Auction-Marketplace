@@ -23,7 +23,15 @@ type NFT struct {
 	OwnerID     string    `json:"owner_id"`    // Mã người sở hữu hiện tại
 	StartPrice  float64   `json:"start_price"` // Giá khởi điểm đấu giá
 	CurrentPrice float64  `json:"current_price"` // Giá hiện tại (giá thầu cao nhất)
-	Status      string    `json:"status"`      // Trạng thái: "draft", "active", "sold", "canceled"
+	Status      string    `json:"status"`      // Trạng thái: xem Lot* trong auction.go
+	// Giai đoạn 3 (docs/23 §5): món hàng hiệu có hộ chiếu số. Lot cũ (seed) để
+	// trống các trường này và không đấu giá được nữa (EndsAt = nil).
+	BrandCode    string     `json:"brand_code"`
+	Model        string     `json:"model"`
+	Serial       string     `json:"serial"`
+	PassportID   string     `gorm:"index" json:"passport_id"`
+	EndsAt       *time.Time `gorm:"index" json:"ends_at"`
+	HighestBidID string     `json:"highest_bid_id"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 }
