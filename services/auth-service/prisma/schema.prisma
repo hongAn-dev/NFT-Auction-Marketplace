@@ -12,7 +12,9 @@ model User {
   email     String   @unique
   password  String
   role      String   @default("user")
-  balance   Float    @default(0.0)
+  // VND, số nguyên (docs/23 §4). balance: khả dụng; held: đang giữ ký quỹ.
+  balance   Decimal  @default(0) @db.Decimal(18, 0)
+  held      Decimal  @default(0) @db.Decimal(18, 0)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -45,3 +47,18 @@ model UserBankAccount {
   @@map("user_bank_accounts")
 }
 
+
+// Khoản giữ ký quỹ của một lượt đặt giá (docs/23 §4). id = holdId = bidId, dùng
+// làm khoá idempotency: gọi lại cùng thao tác trả kết quả cũ.
+model EscrowHold {
+  id             String   @id
+  userId         String   @map("user_id")
+  amount         Decimal  @db.Decimal(18, 0)
+  status         String // HELD, RELEASED, REFUNDED, CAPTURED
+  counterpartyId String?  @map("counterparty_id") // người bán nhận tiền khi CAPTURED
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  @@index([status, createdAt])
+  @@map("escrow_holds")
+}

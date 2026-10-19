@@ -102,17 +102,14 @@ export class PaymentService {
           data: { status: 'SUCCESS' },
         });
 
-        // Tăng balance người dùng
-        const user = await tx.user.findUnique({
+        // Tăng balance người dùng — increment là một câu UPDATE nguyên tử, không đọc
+        // rồi ghi (balance nay là Decimal, cộng kiểu JS sẽ thành nối chuỗi).
+        const credited = await tx.user.updateMany({
           where: { id: transaction.userId },
+          data: { balance: { increment: amountIn } },
         });
-
-        if (user) {
-          await tx.user.update({
-            where: { id: user.id },
-            data: { balance: user.balance + amountIn },
-          });
-          console.log(`[SePay Webhook] Successfully credited ${amountIn} VND to user ${user.email}`);
+        if (credited.count > 0) {
+          console.log(`[SePay Webhook] Successfully credited ${amountIn} VND to user ${transaction.userId}`);
         }
       });
 
@@ -129,12 +126,13 @@ export class PaymentService {
   async getBalance(userId: string) {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: { balance: true },
+      select: { balance: true, held: true },
     });
     if (!user) {
       throw new NotFoundException('Không tìm thấy người dùng');
     }
-    return { success: true, data: { balance: user.balance } };
+    // Decimal → number: VND nguyên, còn xa giới hạn số nguyên an toàn của JS.
+    return { success: true, data: { balance: Number(user.balance), held: Number(user.held) } };
   }
 
   async getTransactions(userId: string) {
@@ -220,10 +218,9 @@ export class PaymentService {
       throw new BadRequestException('Tài khoản ngân hàng liên kết không hợp lệ');
     }
 
-    // 3. Kiểm tra số dư khả dụng
-    if (user.balance < amount) {
-      throw new BadRequestException('Số dư tài khoản không đủ để thực hiện yêu cầu rút tiền');
-    }
+    // 3. Số dư khả dụng được kiểm NGAY trong câu trừ tiền (bước 4): kiểm trước rồi
+    // trừ sau thì một lượt đặt giá chen giữa có thể làm số dư âm. Tiền đang giữ ký
+    // quỹ (held) không bao giờ rút được.
 
     // 4. Chạy ACID Transaction: Trừ tiền (Đóng băng) và Tạo GD PENDING
     const orderCode = Math.floor(100000 + Math.random() * 900000);
@@ -231,10 +228,13 @@ export class PaymentService {
 
     const transaction = await this.prisma.$transaction(async (tx) => {
       // Khấu trừ tiền trực tiếp từ số dư (Đóng băng số tiền rút)
-      await tx.user.update({
-        where: { id: userId },
-        data: { balance: user.balance - amount },
+      const debited = await tx.user.updateMany({
+        where: { id: userId, balance: { gte: amount } },
+        data: { balance: { decrement: amount } },
       });
+      if (debited.count === 0) {
+        throw new BadRequestException('Số dư tài khoản không đủ để thực hiện yêu cầu rút tiền');
+      }
 
       const bankInfoStr = JSON.stringify({
         bankCode: bankAccount.bankCode,
@@ -304,15 +304,10 @@ export class PaymentService {
 
     const updated = await this.prisma.$transaction(async (tx) => {
       // Hoàn trả lại tiền về số dư tài khoản của User
-      const user = await tx.user.findUnique({
+      await tx.user.updateMany({
         where: { id: transaction.userId },
+        data: { balance: { increment: transaction.amount } },
       });
-      if (user) {
-        await tx.user.update({
-          where: { id: user.id },
-          data: { balance: user.balance + transaction.amount },
-        });
-      }
 
       // Đổi trạng thái giao dịch thành FAILED
       return tx.fiatTransaction.update({
