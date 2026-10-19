@@ -55,15 +55,18 @@ func (s *AuctionStore) Highest(ctx context.Context, lotID string) (*domain.Bid, 
 
 func (s *AuctionStore) CommitBid(ctx context.Context, lot *domain.NFT, bid *domain.Bid, prevBidID string, events []domain.OutboxEvent) error {
 	err := s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		// Điều kiện status = active: đóng phiên chen vào giữa (dù đã có khoá Redis)
-		// thì lượt đặt giá hỏng, Bidder nhả khoản giữ.
-		res := tx.Model(&domain.NFT{}).Where("id = ? AND status = ?", lot.ID, domain.LotActive).
+		// CAS ở DB, không chỉ dựa vào khoá Redis (khoá có thể hết hạn giữa lượt đặt
+		// giá): lot còn active, người dẫn đầu vẫn là prevBidID và giá mới cao hơn giá
+		// hiện tại. Sai một điều kiện thì lượt đặt giá hỏng, Bidder nhả khoản giữ.
+		res := tx.Model(&domain.NFT{}).
+			Where("id = ? AND status = ? AND COALESCE(highest_bid_id, '') = ? AND current_price < ?",
+				lot.ID, domain.LotActive, prevBidID, lot.CurrentPrice).
 			Updates(map[string]any{"current_price": lot.CurrentPrice, "highest_bid_id": lot.HighestBidID, "updated_at": lot.UpdatedAt})
 		if res.Error != nil {
 			return res.Error
 		}
 		if res.RowsAffected != 1 {
-			return fmt.Errorf("lot %s không còn mở", lot.ID)
+			return fmt.Errorf("lot %s đã đóng hoặc vừa có lượt đặt giá khác", lot.ID)
 		}
 		if err := tx.Create(bid).Error; err != nil {
 			return err
@@ -118,7 +121,7 @@ func (s *AuctionStore) CloseLot(ctx context.Context, lotID string, now time.Time
 		if err != nil {
 			return err
 		}
-		id := fmt.Sprintf("stl-%d", now.UnixNano())
+		id := domain.NewID("stl")
 		st := &domain.Settlement{ID: id, LotID: lotID, SellerID: lot.OwnerID, WinnerID: win.UserID, Amount: win.Amount,
 			HoldID: win.HoldID, AuctionRef: lotID + "-" + id, PassportID: lot.PassportID, State: domain.StlPendingOpen,
 			ClosedAt: now, NextAttemptAt: now}

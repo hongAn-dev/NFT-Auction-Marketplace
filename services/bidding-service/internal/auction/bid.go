@@ -47,6 +47,8 @@ type BidStore interface {
 	// CommitBid: MỘT transaction — cập nhật lot, thêm bid, đặt bid prevBidID thành
 	// RELEASED (nếu có), ghi outbox.
 	CommitBid(ctx context.Context, lot *domain.NFT, bid *domain.Bid, prevBidID string, events []domain.OutboxEvent) error
+	// BidExistsForHold: lượt đặt giá của khoản giữ đã nằm trong DB chưa.
+	BidExistsForHold(ctx context.Context, holdID string) (bool, error)
 }
 
 type Bidder struct {
@@ -116,9 +118,15 @@ func (b *Bidder) Place(ctx context.Context, lotID, userID string, amount float64
 	return bid, nil
 }
 
-// undo nhả khoản vừa giữ khi không ghi được lượt đặt giá. Nhả hỏng thì job đối
-// soát (Reconciler) sẽ nhả sau, vì khoản đó không có dòng bids nào.
+// undo nhả khoản vừa giữ khi không ghi được lượt đặt giá. Lỗi có thể mập mờ (DB
+// đã COMMIT nhưng phản hồi mất), nên kiểm lại trước: khoản có dòng bids thì giữ
+// nguyên. Không kiểm được, hoặc nhả hỏng, thì để job đối soát xử lý — nó chỉ nhả
+// khoản KHÔNG có dòng bids nào.
 func (b *Bidder) undo(ctx context.Context, holdID string) {
+	ctx = context.WithoutCancel(ctx)
+	if exists, err := b.Store.BidExistsForHold(ctx, holdID); err != nil || exists {
+		return
+	}
 	if err := b.Escrow.Release(ctx, holdID); err != nil {
 		log.Printf("⚠️ nhả khoản giữ %s thất bại, để job đối soát xử lý: %v", holdID, err)
 	}

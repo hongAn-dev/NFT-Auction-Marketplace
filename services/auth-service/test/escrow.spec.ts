@@ -89,6 +89,16 @@ describe('EscrowService', () => {
     expect(m.balance + m.held).toBe(900_000);
   });
 
+  // Review cuối 24b #2: id dùng lại trên một khoản đã nhả / đã chốt không được coi
+  // là "đã giữ" — nếu không, lượt đặt giá mới không có đồng nào phía sau.
+  it('hold lại một id đã nhả hoặc đã chốt là CONFLICT', async () => {
+    const u = await user(1_000_000);
+    await escrow.hold('h-reuse', u.id, 100_000);
+    await escrow.release('h-reuse');
+    expect(await code(escrow.hold('h-reuse', u.id, 100_000))).toBe('CONFLICT');
+    expect(await money(u.id)).toEqual({ balance: 1_000_000, held: 0 });
+  });
+
   it('staleHeld liệt kê khoản HELD cũ hơn ngưỡng', async () => {
     const u = await user(100_000);
     await escrow.hold('h-old', u.id, 10_000);

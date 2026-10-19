@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"regexp"
 	"strings"
 	"time"
 
@@ -32,12 +33,23 @@ type Lister struct {
 
 const maxDurationHours = 7 * 24
 
+// lotIDPattern: auctionRef = <lotId>-stl-<32 hex> phải khớp mẫu của chaincode
+// ^[A-Za-z0-9_.:-]{1,128}$ — lot ID tối đa 64 ký tự cùng bộ ký tự đó.
+var lotIDPattern = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,64}$`)
+
+// maxModelLen: trùng chaincode (validModel).
+const maxModelLen = 128
+
 func (l *Lister) List(ctx context.Context, in ListingInput) (*domain.NFT, error) {
 	switch {
 	case in.ID == "" || in.Title == "" || in.SellerID == "" || in.ImageURL == "":
 		return nil, reject("cần id, title, image_url, creator_id")
 	case strings.TrimSpace(in.Brand) == "" || strings.TrimSpace(in.Serial) == "" || strings.TrimSpace(in.Model) == "":
 		return nil, reject("cần thương hiệu, mẫu và serial")
+	case !lotIDPattern.MatchString(in.ID):
+		return nil, reject("mã lot chỉ gồm chữ, số và _ . : -, tối đa 64 ký tự")
+	case in.Model != strings.TrimSpace(in.Model) || len(in.Model) > maxModelLen:
+		return nil, reject("tên mẫu không có khoảng trắng đầu cuối, tối đa %d byte", maxModelLen)
 	case in.DurationHours < 1 || in.DurationHours > maxDurationHours:
 		return nil, reject("thời lượng phiên phải từ 1 giờ tới 7 ngày")
 	case in.StartPrice <= 0 || in.StartPrice != math.Trunc(in.StartPrice) || in.StartPrice > maxAmount:

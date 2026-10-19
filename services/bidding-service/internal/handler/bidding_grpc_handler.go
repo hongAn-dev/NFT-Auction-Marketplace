@@ -33,7 +33,8 @@ type BiddingGRPCHandler struct {
 // success=false kèm message; chỉ lỗi hệ thống mới là lỗi gRPC.
 func (h *BiddingGRPCHandler) PlaceBid(ctx context.Context, req *pb.PlaceBidRequest) (*pb.PlaceBidResponse, error) {
 	key := auction.LockKey(req.NftId)
-	ok, err := h.Lock.AcquireLock(ctx, key, 10*time.Second)
+	// TTL > timeout của client ký quỹ (45 s); thứ tự đặt giá vẫn được giữ bằng CAS ở DB.
+	ok, err := h.Lock.AcquireLock(ctx, key, 60*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("khoá phân tán Redis: %w", err)
 	}

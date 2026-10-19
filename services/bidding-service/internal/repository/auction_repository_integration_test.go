@@ -202,3 +202,43 @@ func TestOnePassportOneOpenLot(t *testing.T) {
 		t.Fatal("nhiều lot không có hộ chiếu vẫn được")
 	}
 }
+
+// Review cuối 24b #1: khoá Redis có thể hết hạn giữa lượt đặt giá. Thứ tự đặt giá
+// phải được giữ ở DB: lượt đặt giá dựa trên "người dẫn đầu" cũ, hoặc không cao hơn
+// giá hiện tại, phải hỏng nguyên khối (Bidder nhả khoản giữ của nó).
+func TestCommitBidRejectsStaleLeader(t *testing.T) {
+	db := testDB(t)
+	s := &AuctionStore{DB: db}
+	ctx := context.Background()
+	l := lot("lot-1", "0xp1", t0.Add(time.Hour))
+	db.Create(l)
+	b := *l
+	b.CurrentPrice, b.HighestBidID = 3e6, "bid-b"
+	if err := s.CommitBid(ctx, &b, bid("bid-b", "lot-1", "bob", 3e6), "", nil); err != nil {
+		t.Fatal(err)
+	}
+	// Lượt của A tính "người dẫn đầu" lúc chưa có B (prev rỗng) và giá thấp hơn.
+	a := *l
+	a.CurrentPrice, a.HighestBidID = 2e6, "bid-a"
+	if err := s.CommitBid(ctx, &a, bid("bid-a", "lot-1", "alice", 2e6), "", nil); err == nil {
+		t.Fatal("lượt đặt giá dựa trên người dẫn đầu cũ phải bị từ chối")
+	}
+	// Đúng người dẫn đầu nhưng giá không cao hơn cũng bị từ chối.
+	c := *l
+	c.CurrentPrice, c.HighestBidID = 3e6, "bid-c"
+	if err := s.CommitBid(ctx, &c, bid("bid-c", "lot-1", "carol", 3e6), "bid-b", nil); err == nil {
+		t.Fatal("giá không cao hơn giá hiện tại phải bị từ chối")
+	}
+	var got domain.NFT
+	db.First(&got, "id = ?", "lot-1")
+	var bb domain.Bid
+	db.First(&bb, "id = ?", "bid-b")
+	if got.CurrentPrice != 3e6 || got.HighestBidID != "bid-b" || bb.Status != domain.BidHeld {
+		t.Fatalf("giá và người dẫn đầu phải giữ nguyên: %v %s %s", got.CurrentPrice, got.HighestBidID, bb.Status)
+	}
+	for _, id := range []string{"bid-a", "bid-c"} {
+		if ok, _ := s.BidExistsForHold(ctx, id); ok {
+			t.Fatalf("%s bị từ chối không được để lại dòng bids", id)
+		}
+	}
+}

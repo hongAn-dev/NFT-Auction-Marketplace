@@ -53,6 +53,7 @@ type fakeBidStore struct {
 	lot       *domain.NFT
 	bids      []*domain.Bid
 	commitErr error
+	ackLost   bool // CommitBid đã ghi nhưng phản hồi mất (lỗi mạng sau COMMIT)
 	events    []domain.OutboxEvent
 	prevSeen  string
 }
@@ -75,7 +76,7 @@ func (f *fakeBidStore) Highest(context.Context, string) (*domain.Bid, error) {
 }
 
 func (f *fakeBidStore) CommitBid(_ context.Context, lot *domain.NFT, bid *domain.Bid, prevBidID string, ev []domain.OutboxEvent) error {
-	if f.commitErr != nil {
+	if f.commitErr != nil && !f.ackLost {
 		return f.commitErr
 	}
 	for _, b := range f.bids {
@@ -87,7 +88,16 @@ func (f *fakeBidStore) CommitBid(_ context.Context, lot *domain.NFT, bid *domain
 	f.lot = lot
 	f.bids = append(f.bids, bid)
 	f.events = append(f.events, ev...)
-	return nil
+	return f.commitErr
+}
+
+func (f *fakeBidStore) BidExistsForHold(_ context.Context, id string) (bool, error) {
+	for _, b := range f.bids {
+		if b.HoldID == id {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func activeLot() *domain.NFT {
@@ -187,5 +197,16 @@ func TestBidCommitFailureReleasesHold(t *testing.T) {
 	}
 	if esc.balance["alice"] != 5e6 || len(esc.ops) != 2 || esc.ops[1] != "release bid-1" {
 		t.Fatalf("phải nhả lại khoản giữ: balance=%d ops=%v", esc.balance["alice"], esc.ops)
+	}
+}
+
+// Review cuối 24b: CommitBid báo lỗi nhưng thật ra đã ghi (mất phản hồi sau COMMIT)
+// — không được nhả khoản giữ của một lượt đặt giá đã nằm trong DB.
+func TestBidAmbiguousCommitKeepsHold(t *testing.T) {
+	store := &fakeBidStore{lot: activeLot(), commitErr: errors.New("mất kết nối sau COMMIT"), ackLost: true}
+	esc := newEscrow(map[string]int64{"alice": 5e6})
+	_, _ = newBidder(store, esc).Place(context.Background(), "lot-1", "alice", 2_000_000)
+	if len(esc.ops) != 1 || esc.ops[0] != "hold bid-1" || esc.balance["alice"] != 3e6 {
+		t.Fatalf("lượt đặt giá đã ghi thì giữ nguyên khoản giữ, nhận %v", esc.ops)
 	}
 }

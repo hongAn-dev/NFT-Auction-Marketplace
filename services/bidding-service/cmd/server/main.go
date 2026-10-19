@@ -13,6 +13,7 @@ import (
 	_ "bidding-service/docs"
 	"bidding-service/internal/auction"
 	"bidding-service/internal/clients"
+	"bidding-service/internal/domain"
 	"bidding-service/internal/handler"
 	"bidding-service/internal/logger"
 	"bidding-service/internal/outbox"
@@ -181,7 +182,7 @@ func main() {
 
 	// Saga cũ (royalty → TransferNFT giả) đã được thay bằng saga thanh toán ở trên.
 	nftGRPCHandler := &handler.BiddingGRPCHandler{
-		Bidder:      &auction.Bidder{Store: store, Escrow: escrow, Now: time.Now, NewID: func() string { return fmt.Sprintf("bid-%d", time.Now().UnixNano()) }},
+		Bidder:      &auction.Bidder{Store: store, Escrow: escrow, Now: time.Now, NewID: func() string { return domain.NewID("bid") }},
 		Engine:      engine,
 		Settlements: store,
 		Lock:        redisRepo,

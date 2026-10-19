@@ -30,6 +30,7 @@ func (o *oneLot) Highest(context.Context, string) (*domain.Bid, error) { return 
 func (o *oneLot) CommitBid(context.Context, *domain.NFT, *domain.Bid, string, []domain.OutboxEvent) error {
 	return nil
 }
+func (o *oneLot) BidExistsForHold(context.Context, string) (bool, error) { return false, nil }
 func (o *oneLot) SettlementOfLot(context.Context, string) (*domain.Settlement, error) {
 	return o.stl, nil
 }

@@ -3,6 +3,7 @@ package auction
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -70,6 +71,12 @@ func TestListLotValidation(t *testing.T) {
 		"thời lượng 8 ngày": func(i *ListingInput) { i.DurationHours = 8 * 24 },
 		"giá lẻ đồng":       func(i *ListingInput) { i.StartPrice = 1.5 },
 		"thiếu người bán":   func(i *ListingInput) { i.SellerID = "" },
+		// Review cuối 24b: chaincode từ chối auctionRef / model kiểu này — phải chặn lúc
+		// đăng bán, không để chạy hết phiên rồi mới huỷ.
+		"lot id có dấu cách": func(i *ListingInput) { i.ID = "lot 9" },
+		"lot id quá dài":     func(i *ListingInput) { i.ID = strings.Repeat("a", 65) },
+		"mẫu có cách đầu":    func(i *ListingInput) { i.Model = " Submariner" },
+		"mẫu quá dài":        func(i *ListingInput) { i.Model = strings.Repeat("m", 129) },
 	} {
 		in := input()
 		mutate(&in)

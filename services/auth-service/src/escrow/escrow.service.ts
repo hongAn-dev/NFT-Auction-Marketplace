@@ -96,6 +96,9 @@ export class EscrowService {
     if (h.userId !== userId || Number(h.amount) !== amount) {
       throw new EscrowError('CONFLICT', `khoản giữ ${h.id} đã có với người dùng / số tiền khác`);
     }
+    if (h.status !== 'HELD') {
+      throw new EscrowError('CONFLICT', `khoản giữ ${h.id} đã ${h.status}, không giữ lại được`);
+    }
     return view(h);
   }
 
