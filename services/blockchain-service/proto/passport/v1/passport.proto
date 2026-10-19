@@ -1,0 +1,116 @@
+// API của passport-service (docs/21 §7). Các RPC đi theo đúng các hàm của
+// chaincode `passport`. Sinh mã:
+//   protoc --go_out=. --go_opt=module=github.com/hongAn-dev/AnGrad/labs/passport-service \
+//          --go-grpc_out=. --go-grpc_opt=module=github.com/hongAn-dev/AnGrad/labs/passport-service \
+//          proto/passport/v1/passport.proto
+syntax = "proto3";
+
+package passport.v1;
+
+option go_package = "github.com/hongAn-dev/AnGrad/labs/passport-service/passportv1;passportv1";
+
+service PassportService {
+  // Ghi — vai platform.
+  rpc OpenSale(OpenSaleRequest) returns (Sale);
+  rpc CompleteSale(SaleRef) returns (Passport);
+  rpc CancelSale(CancelSaleRequest) returns (Sale);
+  // Ghi — vai authenticator.
+  rpc RecordAuthentication(RecordAuthenticationRequest) returns (Sale);
+  rpc ReportLost(SaleRef) returns (Sale);
+  // Đọc — cả hai vai.
+  rpc GetSale(SaleRef) returns (Sale);
+  rpc GetPassport(PassportRef) returns (Passport);
+  rpc GetHistory(PassportRef) returns (History);
+  rpc ListSales(ListSalesRequest) returns (SaleList);
+  rpc DerivePassportID(DeriveRequest) returns (PassportRef);
+}
+
+message OpenSaleRequest {
+  string auction_ref = 1;
+  string brand_code = 2;
+  string model = 3;
+  string serial = 4;
+  string seller_ref = 5;
+  string winner_ref = 6;
+  string listing_photos_hash = 7;
+  int32 deadline_days = 8;
+}
+
+message RecordAuthenticationRequest {
+  string sale_id = 1;
+  string result = 2; // PASS | FAIL
+  string reason_code = 3;
+  string observed_serial = 4;
+  string report_hash = 5;
+  string photos_root = 6;
+}
+
+message CancelSaleRequest {
+  string sale_id = 1;
+  string reason_code = 2;
+}
+
+message SaleRef { string sale_id = 1; }
+message PassportRef { string passport_id = 1; }
+message ListSalesRequest { string status = 1; }
+message DeriveRequest {
+  string brand_code = 1;
+  string serial = 2;
+}
+
+message Sale {
+  string sale_id = 1;
+  string auction_ref = 2;
+  string passport_id = 3;
+  string brand_code = 4;
+  string model = 5;
+  string serial = 6;
+  string seller_ref = 7;
+  string winner_ref = 8;
+  string listing_photos_hash = 9;
+  int32 deadline_days = 10;
+  string deadline_at = 11;
+  bool passport_existed = 12;
+  string status = 13;
+  string result = 14;
+  string reason_code = 15;
+  string observed_serial = 16;
+  string report_hash = 17;
+  string photos_root = 18;
+  string opened_at = 19;
+  string updated_at = 20;
+  string delivery_deadline_at = 21;
+  // Chỉ có ở phản hồi của RPC ghi: txId Fabric của giao dịch vừa commit.
+  string tx_id = 30;
+}
+
+message Passport {
+  string passport_id = 1;
+  string brand_code = 2;
+  string model = 3;
+  string serial = 4;
+  string owner_ref = 5;
+  string status = 6;
+  string active_sale = 7;
+  int32 sales_count = 8;
+  string created_at = 9;
+  string updated_at = 10;
+  string tx_id = 30;
+}
+
+message Event {
+  string event_id = 1;
+  string event_type = 2;
+  string sale_id = 3;
+  string state = 4;
+  string payload_hash = 5;
+  string signer_msp = 6;
+  string signer_key_id = 7;
+  string algorithm = 8;
+  int32 signature_bytes = 9;
+  string timestamp = 10;
+  string tx_id = 11;
+}
+
+message History { repeated Event events = 1; }
+message SaleList { repeated Sale sales = 1; }
