@@ -1,7 +1,7 @@
 # =================================================================
 # STAGE 1: Builder (Môi trường build code cực kỳ đầy đủ)
 # =================================================================
-FROM golang:1.23-alpine AS builder
+FROM golang:1.25-alpine AS builder
 
 # Thiết lập thư mục làm việc bên trong container
 WORKDIR /app

@@ -2,223 +2,99 @@ package handler
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
+	"bidding-service/internal/auction"
 	"bidding-service/internal/domain"
-	"bidding-service/internal/repository"
+	"bidding-service/internal/settlement"
 	pb "bidding-service/proto"
-	"gorm.io/gorm"
 )
 
-// BiddingGRPCHandler implements the pb.BiddingServiceServer interface.
+// SettlementReader: saga của một lot (nil nếu lot chưa đóng phiên).
+type SettlementReader interface {
+	SettlementOfLot(ctx context.Context, lotID string) (*domain.Settlement, error)
+}
+
+// BiddingGRPCHandler: gRPC cho api-gateway (docs/23 §5.2, §6.1).
 type BiddingGRPCHandler struct {
 	pb.UnimplementedBiddingServiceServer
-	nftUsecase domain.NFTUsecase
-	redisRepo  *repository.RedisRepository
-	rabbitRepo *repository.RabbitMQRepository
-	db         *gorm.DB
-	outboxRepo domain.OutboxRepository
-	sagaRepo   domain.SagaRepository
+	Bidder      *auction.Bidder
+	Engine      *settlement.Engine
+	Settlements SettlementReader
+	Lock        auction.Locker
+	// Invalidate: xoá cache Redis của lot sau khi đặt giá (nil = bỏ qua).
+	Invalidate func(ctx context.Context, lotID string)
 }
 
-// NewBiddingGRPCHandler khởi tạo gRPC Handler với Postgres, Redis, RabbitMQ và các Outbox/Saga Repositories.
-func NewBiddingGRPCHandler(
-	nftUc domain.NFTUsecase,
-	redisRepo *repository.RedisRepository,
-	rabbitRepo *repository.RabbitMQRepository,
-	db *gorm.DB,
-	outboxRepo domain.OutboxRepository,
-	sagaRepo domain.SagaRepository,
-) *BiddingGRPCHandler {
-	return &BiddingGRPCHandler{
-		nftUsecase: nftUc,
-		redisRepo:  redisRepo,
-		rabbitRepo: rabbitRepo,
-		db:         db,
-		outboxRepo: outboxRepo,
-		sagaRepo:   sagaRepo,
-	}
-}
-
-// PlaceBid xử lý đặt thầu qua Transactional Outbox và Saga Orchestrator
+// PlaceBid: đặt giá có ký quỹ. Lý do nghiệp vụ (hết giờ, thiếu tiền…) trả
+// success=false kèm message; chỉ lỗi hệ thống mới là lỗi gRPC.
 func (h *BiddingGRPCHandler) PlaceBid(ctx context.Context, req *pb.PlaceBidRequest) (*pb.PlaceBidResponse, error) {
-	fmt.Printf("📥 gRPC: Nhận yêu cầu PlaceBid từ User %s cho NFT %s với số tiền: %.2f\n", req.UserId, req.NftId, req.Amount)
-
-	// ── KHÓA PHÂN TÁN REDIS (DISTRIBUTED LOCK) ────────────────────
-	lockKey := fmt.Sprintf("bid:lock:%s", req.NftId)
-
-	acquired, err := h.redisRepo.AcquireLock(ctx, lockKey, 5*time.Second)
+	key := auction.LockKey(req.NftId)
+	ok, err := h.Lock.AcquireLock(ctx, key, 10*time.Second)
 	if err != nil {
-		return nil, fmt.Errorf("lỗi kiểm tra khóa phân tán Redis: %w", err)
+		return nil, fmt.Errorf("khoá phân tán Redis: %w", err)
 	}
-
-	if !acquired {
-		fmt.Printf("🔒 gRPC: Bị khóa phân tán chặn đứng! NFT %s đang có người khác đặt thầu cùng lúc.\n", req.NftId)
-		return &pb.PlaceBidResponse{
-			Success: false,
-			Message: "Hệ thống đang bận xử lý lượt đặt thầu khác cho NFT này, vui lòng thử lại sau!",
-		}, nil
+	if !ok {
+		return &pb.PlaceBidResponse{Success: false,
+			Message: "Hệ thống đang xử lý lượt đặt giá khác cho món đồ này, vui lòng thử lại."}, nil
 	}
+	defer func() { _ = h.Lock.ReleaseLock(context.WithoutCancel(ctx), key) }()
 
-	defer func() {
-		_ = h.redisRepo.ReleaseLock(ctx, lockKey)
-		fmt.Printf("🔓 gRPC: Đã tự động giải phóng khóa phân tán cho NFT %s.\n", req.NftId)
-	}()
-
-	// 1. Kiểm tra sự tồn tại của NFT
-	nft, err := h.nftUsecase.GetNFT(ctx, req.NftId)
+	bid, err := h.Bidder.Place(ctx, req.NftId, req.UserId, req.Amount)
+	var rej *auction.Rejected
+	if errors.As(err, &rej) {
+		return &pb.PlaceBidResponse{Success: false, Message: rej.Reason}, nil
+	}
 	if err != nil {
-		if err == domain.ErrNFTNotFound {
-			return &pb.PlaceBidResponse{
-				Success: false,
-				Message: "Không tìm thấy NFT chỉ định",
-			}, nil
-		}
-		return nil, fmt.Errorf("lỗi kiểm tra NFT: %w", err)
+		slog.Error("đặt giá lỗi", "nft_id", req.NftId, "user_id", req.UserId, "error", err)
+		return nil, err
 	}
-
-	// 2. Validate giá thầu phải lớn hơn giá hiện tại
-	if req.Amount <= nft.CurrentPrice {
-		return &pb.PlaceBidResponse{
-			Success: false,
-			Message: fmt.Sprintf("Giá thầu %.2f phải lớn hơn giá hiện tại %.2f", req.Amount, nft.CurrentPrice),
-		}, nil
+	if h.Invalidate != nil {
+		h.Invalidate(ctx, req.NftId)
 	}
-
-	// Giả lập xử lý trễ 1 giây để kiểm thử khóa phân tán
-	time.Sleep(1 * time.Second)
-
-	// Tạo đối tượng Bid phản hồi
-	bidID := fmt.Sprintf("bid-%d", time.Now().UnixNano())
-	grpcBid := &pb.Bid{
-		Id:        bidID,
-		NftId:     req.NftId,
-		UserId:    req.UserId,
-		Amount:    req.Amount,
-		CreatedAt: time.Now().Unix(),
-	}
-
-	// ── 3. THỰC THI TRANSACTIONAL OUTBOX & SAGA LOG TRONG 1 DB TRANSACTION ──
-	errTx := h.db.Transaction(func(tx *gorm.DB) error {
-		// Khởi tạo các repositories chạy trên transaction `tx`
-		txNFTRepo := repository.NewPostgresNFTRepository(tx)
-		txOutboxRepo := repository.NewPostgresOutboxRepository(tx)
-		txSagaRepo := repository.NewPostgresSagaRepository(tx)
-
-		// Lưu thông tin trước khi thay đổi để phục vụ Compensating Transaction (Rollback) của Saga
-		prevPrice := nft.CurrentPrice
-		prevOwner := nft.OwnerID
-
-		// Cập nhật giá và chủ sở hữu mới trong DB
-		nft.CurrentPrice = req.Amount
-		nft.OwnerID = req.UserId
-		nft.UpdatedAt = time.Now()
-
-		if err := txNFTRepo.Update(ctx, nft); err != nil {
-			return fmt.Errorf("lỗi cập nhật NFT: %w", err)
-		}
-
-		// Lưu Saga Log (Trạng thái STARTED)
-		sagaLog := &domain.SagaLog{
-			ID:          bidID,
-			NFTID:       req.NftId,
-			UserID:      req.UserId,
-			Amount:      req.Amount,
-			PrevPrice:   prevPrice,
-			PrevOwnerID: prevOwner,
-			State:       domain.SagaStarted,
-		}
-		if err := txSagaRepo.Create(ctx, sagaLog); err != nil {
-			return fmt.Errorf("lỗi tạo Saga log: %w", err)
-		}
-
-		// Chuẩn bị payload sự kiện
-		eventData := map[string]interface{}{
-			"bid_id":     bidID,
-			"nft_id":     req.NftId,
-			"user_id":    req.UserId,
-			"amount":     req.Amount,
-			"created_at": grpcBid.CreatedAt,
-		}
-		payloadBytes, err := json.Marshal(eventData)
-		if err != nil {
-			return fmt.Errorf("lỗi serialize payload: %w", err)
-		}
-
-		// Ghi Outbox Event cho RabbitMQ: "bid.placed" (Email Worker)
-		outboxPlaced := &domain.OutboxEvent{
-			Topic:   "bid.placed",
-			Payload: payloadBytes,
-		}
-		if err := txOutboxRepo.Save(ctx, outboxPlaced); err != nil {
-			return fmt.Errorf("lỗi ghi Outbox (bid.placed): %w", err)
-		}
-
-		// Ghi Outbox Event cho RabbitMQ: "nft.purchased" (Royalty Worker)
-		outboxPurchased := &domain.OutboxEvent{
-			Topic:   "nft.purchased",
-			Payload: payloadBytes,
-		}
-		if err := txOutboxRepo.Save(ctx, outboxPurchased); err != nil {
-			return fmt.Errorf("lỗi ghi Outbox (nft.purchased): %w", err)
-		}
-
-		// Ghi Outbox Event cho Redis Pub/Sub: "redis:bid:updated" (WS Realtime)
-		outboxRedis := &domain.OutboxEvent{
-			Topic:   "redis:bid:updated",
-			Payload: payloadBytes,
-		}
-		if err := txOutboxRepo.Save(ctx, outboxRedis); err != nil {
-			return fmt.Errorf("lỗi ghi Outbox (redis:bid:updated): %w", err)
-		}
-
-		return nil
-	})
-
-	if errTx != nil {
-		return nil, fmt.Errorf("lỗi thực hiện đặt thầu transaction: %w", errTx)
-	}
-
-	// Xóa cache cũ trên Redis để tránh client đọc stale data
-	if h.redisRepo != nil {
-		_ = h.redisRepo.DeleteNFTCache(ctx, req.NftId)
-	}
-
-	fmt.Printf("✅ gRPC: Đặt thầu THÀNH CÔNG cho NFT %s (Saga ID %s). Đã lưu DB và tạo Outbox Events.\n", req.NftId, bidID)
-
-	return &pb.PlaceBidResponse{
-		Success: true,
-		Bid:     grpcBid,
-		Message: "Đặt giá thầu thành công! (Transactional Outbox & Saga đã được kích hoạt)",
-	}, nil
+	return &pb.PlaceBidResponse{Success: true, Message: "Đặt giá thành công, tiền đã được giữ ký quỹ.",
+		Bid: &pb.Bid{Id: bid.ID, NftId: bid.NFTID, UserId: bid.UserID, Amount: float64(bid.Amount), CreatedAt: bid.CreatedAt.Unix()}}, nil
 }
 
-// GetHighestBid lấy thông tin giá thầu cao nhất hiện tại của một NFT qua gRPC
+// GetHighestBid: lượt đặt giá cao nhất còn giữ tiền; chưa có thì user_id rỗng và
+// amount là giá khởi điểm.
 func (h *BiddingGRPCHandler) GetHighestBid(ctx context.Context, req *pb.GetHighestBidRequest) (*pb.GetHighestBidResponse, error) {
-	fmt.Printf("📥 gRPC: Nhận yêu cầu GetHighestBid cho NFT %s\n", req.NftId)
-
-	nft, err := h.nftUsecase.GetNFT(ctx, req.NftId)
+	lot, err := h.Bidder.Store.Lot(ctx, req.NftId)
+	if errors.Is(err, domain.ErrNFTNotFound) {
+		return &pb.GetHighestBidResponse{Success: false}, nil
+	}
 	if err != nil {
-		if err == domain.ErrNFTNotFound {
-			return &pb.GetHighestBidResponse{
-				Success: false,
-			}, nil
-		}
-		return nil, fmt.Errorf("lỗi truy vấn NFT: %w", err)
+		return nil, err
 	}
-
-	highestBid := &pb.Bid{
-		Id:        "bid-current-highest",
-		NftId:     nft.ID,
-		UserId:    nft.OwnerID,
-		Amount:    nft.CurrentPrice,
-		CreatedAt: nft.UpdatedAt.Unix(),
+	out := &pb.Bid{NftId: lot.ID, Amount: lot.CurrentPrice, CreatedAt: lot.UpdatedAt.Unix()}
+	if b, err := h.Bidder.Store.Highest(ctx, req.NftId); err == nil && b != nil {
+		out.Id, out.UserId, out.Amount, out.CreatedAt = b.ID, b.UserID, float64(b.Amount), b.CreatedAt.Unix()
 	}
+	return &pb.GetHighestBidResponse{Success: true, HighestBid: out}, nil
+}
 
-	return &pb.GetHighestBidResponse{
-		Success:     true,
-		HighestBid: highestBid,
-	}, nil
+// ConfirmReceived: người thắng bấm "Đã nhận hàng" (docs/23 §6.1).
+func (h *BiddingGRPCHandler) ConfirmReceived(ctx context.Context, req *pb.ConfirmReceivedRequest) (*pb.ConfirmReceivedResponse, error) {
+	s, err := h.Settlements.SettlementOfLot(ctx, req.NftId)
+	if err != nil {
+		return nil, err
+	}
+	if s == nil {
+		return &pb.ConfirmReceivedResponse{Success: false, Message: "Phiên đấu giá chưa đóng."}, nil
+	}
+	switch err := h.Engine.ConfirmReceived(ctx, s.ID, req.UserId); {
+	case errors.Is(err, settlement.ErrNotWinner), errors.Is(err, settlement.ErrWrongState):
+		return &pb.ConfirmReceivedResponse{Success: false, Message: err.Error(), State: s.State}, nil
+	case err != nil:
+		return nil, err
+	}
+	now, err := h.Engine.Store.Get(ctx, s.ID)
+	if err != nil {
+		return nil, err
+	}
+	return &pb.ConfirmReceivedResponse{Success: true, Message: "Đã ghi nhận. Sàn sẽ hoàn tất vụ bán trên chuỗi rồi trả tiền cho người bán.",
+		State: now.State}, nil
 }

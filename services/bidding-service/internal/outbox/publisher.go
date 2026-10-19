@@ -3,18 +3,27 @@ package outbox
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"time"
 
+	"bidding-service/internal/auction"
+	"bidding-service/internal/clients"
 	"bidding-service/internal/domain"
 	"bidding-service/internal/repository"
 )
+
+// Releaser: nhả khoản ký quỹ ở auth-service (docs/23 §5.2).
+type Releaser interface {
+	Release(ctx context.Context, holdID string) error
+}
 
 // Publisher quản lý tiến trình gửi ngầm các event từ bảng Outbox sang RabbitMQ/Redis
 type Publisher struct {
 	outboxRepo domain.OutboxRepository
 	rabbitRepo *repository.RabbitMQRepository
 	redisRepo  *repository.RedisRepository
+	escrow     Releaser
 }
 
 // NewPublisher khởi tạo đối tượng Publisher
@@ -22,11 +31,13 @@ func NewPublisher(
 	outboxRepo domain.OutboxRepository,
 	rabbitRepo *repository.RabbitMQRepository,
 	redisRepo *repository.RedisRepository,
+	escrow Releaser,
 ) *Publisher {
 	return &Publisher{
 		outboxRepo: outboxRepo,
 		rabbitRepo: rabbitRepo,
 		redisRepo:  redisRepo,
+		escrow:     escrow,
 	}
 }
 
@@ -70,7 +81,14 @@ func (p *Publisher) processEvents(ctx context.Context) {
 
 		success := true
 		// Định tuyến sự kiện theo Topic
-		if event.Topic == "redis:bid:updated" {
+		if event.Topic == auction.TopicEscrowRelease {
+			// Nhả tiền người bị vượt giá. 409 = khoản đã chốt từ trước → coi như xong.
+			holdID, _ := payload["hold_id"].(string)
+			if err := p.escrow.Release(ctx, holdID); err != nil && !errors.Is(err, clients.ErrAlreadySettled) {
+				log.Printf("⚠️ Outbox Publisher: nhả khoản giữ %s lỗi, thử lại sau: %v\n", holdID, err)
+				success = false
+			}
+		} else if event.Topic == "redis:bid:updated" {
 			if p.redisRepo != nil {
 				nftID, _ := payload["nft_id"].(string)
 				errPub := p.redisRepo.PublishBidEvent(ctx, nftID, payload)

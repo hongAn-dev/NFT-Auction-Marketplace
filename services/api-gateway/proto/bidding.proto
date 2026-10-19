@@ -7,6 +7,9 @@ option go_package = "bidding-service/proto;bidding";
 service BiddingService {
   rpc PlaceBid (PlaceBidRequest) returns (PlaceBidResponse);
   rpc GetHighestBid (GetHighestBidRequest) returns (GetHighestBidResponse);
+  // Người thắng xác nhận đã nhận hàng (docs/23 §6.1). user_id do api-gateway lấy
+  // từ JWT, không lấy từ body.
+  rpc ConfirmReceived (ConfirmReceivedRequest) returns (ConfirmReceivedResponse);
 }
 
 message Bid {
@@ -36,4 +39,15 @@ message GetHighestBidRequest {
 message GetHighestBidResponse {
   bool success = 1;
   Bid highest_bid = 2;
+}
+
+message ConfirmReceivedRequest {
+  string nft_id = 1;
+  string user_id = 2;
+}
+
+message ConfirmReceivedResponse {
+  bool success = 1;
+  string message = 2;
+  string state = 3; // trạng thái saga sau khi xác nhận
 }
